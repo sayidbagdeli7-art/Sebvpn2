@@ -87,7 +87,7 @@ class VpnTunnelService : VpnService() {
 
         coreController = Libv2ray.newCoreController(callbackHandler)
         try {
-            coreController?.startLoop(configJson, fd.fd.toLong())
+            coreController?.startLoop(configJson, fd.fd)
             isRunning = true
         } catch (e: Exception) {
             isRunning = false
