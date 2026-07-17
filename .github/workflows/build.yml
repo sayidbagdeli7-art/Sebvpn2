@@ -1,0 +1,45 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Download libv2ray.aar (Xray core) from latest AndroidLibXrayLite release
+        run: |
+          mkdir -p app/libs
+          rm -f app/libs/PUT_libv2ray.aar_HERE.txt
+          URL=$(curl -s https://api.github.com/repos/2dust/AndroidLibXrayLite/releases/latest \
+            | grep "browser_download_url" | grep "libv2ray.aar" | head -n1 | cut -d '"' -f4)
+          echo "Downloading: $URL"
+          curl -L -o app/libs/libv2ray.aar "$URL"
+          ls -la app/libs/
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoVPN-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
