@@ -13,14 +13,6 @@ import com.autovpn.app.MainActivity
 import libv2ray.CoreController
 import libv2ray.Libv2ray
 
-/**
- * NOTE ON THE GOMOBILE BINDING NAMES:
- * The exact class/method names below (Libv2ray.newCoreController, CoreController, etc.)
- * come from https://pkg.go.dev/github.com/2dust/AndroidLibXrayLite as of the version this
- * project targets. gomobile sometimes renames things slightly between releases -
- * after you add libv2ray.aar to app/libs, let Android Studio autocomplete confirm the
- * exact names and adjust here if a rename happened upstream.
- */
 class VpnTunnelService : VpnService() {
 
     companion object {
@@ -66,23 +58,24 @@ class VpnTunnelService : VpnService() {
     }
 
     private fun startTunnel(configJson: String) {
-        if (isRunning) stopTunnel()
+        try { coreController?.stopLoop() } catch (e: Exception) { }
+        coreController = null
 
-        val builder = Builder()
-            .setSession("AutoVPN")
-            .addAddress("10.10.14.1", 32)
-            .addRoute("0.0.0.0", 0)
-            .addDnsServer("1.1.1.1")
-            .addDnsServer("8.8.8.8")
-            .setMtu(1500)
+        if (tunFd == null) {
+            val builder = Builder()
+                .setSession("AutoVPN")
+                .addAddress("10.10.14.1", 32)
+                .addRoute("0.0.0.0", 0)
+                .addDnsServer("1.1.1.1")
+                .addDnsServer("8.8.8.8")
+                .setMtu(1500)
 
-        // Exclude our own app from the tunnel so Xray's own outbound connections
-        // go out directly instead of looping back into the VPN interface.
-        try {
-            builder.addDisallowedApplication(packageName)
-        } catch (e: Exception) { /* ignore */ }
+            try {
+                builder.addDisallowedApplication(packageName)
+            } catch (e: Exception) { }
 
-        tunFd = builder.establish()
+            tunFd = builder.establish()
+        }
         val fd = tunFd ?: return
 
         coreController = Libv2ray.newCoreController(callbackHandler)
@@ -91,7 +84,6 @@ class VpnTunnelService : VpnService() {
             isRunning = true
         } catch (e: Exception) {
             isRunning = false
-            stopTunnel()
         }
     }
 
