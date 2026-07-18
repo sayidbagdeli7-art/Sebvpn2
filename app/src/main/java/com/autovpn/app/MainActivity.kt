@@ -257,7 +257,7 @@ class MainActivity : ComponentActivity() {
                             )
                         },
                         confirmButton = {
-                            TextButton(onClick = {
+                            TextButton(onClick = { 
                                 if (newUrl.isNotBlank()) {
                                     subscriptions = SubscriptionStore.addUrl(this@MainActivity, newUrl.trim())
                                 }
