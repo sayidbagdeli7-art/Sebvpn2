@@ -8,6 +8,14 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import libv2ray.Libv2ray
+import java.util.concurrent.atomic.AtomicInteger
+
+/** Live snapshot of the ping test progress, for showing on screen. */
+data class PingProgress(
+    val total: Int,
+    val succeeded: Int,
+    val failed: Int
+)
 
 /**
  * Uses Xray's own MeasureOutboundDelay (exposed by AndroidLibXrayLite) to test the real
@@ -19,9 +27,20 @@ object PingTester {
     private const val TEST_URL = "https://www.gstatic.com/generate_204"
     private const val MAX_PARALLEL = 6
 
-    /** Tests every config concurrently and returns the same list, sorted best-ping-first. */
-    suspend fun testAll(configs: List<ProxyConfig>): List<ProxyConfig> = withContext(Dispatchers.IO) {
+    /**
+     * Tests every config concurrently and returns the same list, sorted best-ping-first.
+     * onProgress is called after every single config finishes (success or fail) with the
+     * running totals so the UI can show live numbers.
+     */
+    suspend fun testAll(
+        configs: List<ProxyConfig>,
+        onProgress: ((PingProgress) -> Unit)? = null
+    ): List<ProxyConfig> = withContext(Dispatchers.IO) {
         val semaphore = Semaphore(MAX_PARALLEL)
+        val succeeded = AtomicInteger(0)
+        val failed = AtomicInteger(0)
+        val total = configs.size
+
         val jobs = configs.map { cfg ->
             async {
                 semaphore.withPermit {
@@ -30,6 +49,8 @@ object PingTester {
                     } catch (e: Exception) {
                         -2L
                     }
+                    if (cfg.pingMs > 0) succeeded.incrementAndGet() else failed.incrementAndGet()
+                    onProgress?.invoke(PingProgress(total, succeeded.get(), failed.get()))
                 }
             }
         }
@@ -38,5 +59,8 @@ object PingTester {
     }
 
     /** Convenience: fetch + ping + return the single best config, or null if none reachable. */
-    suspend fun bestOf(configs: List<ProxyConfig>): ProxyConfig? = testAll(configs).firstOrNull()
+    suspend fun bestOf(
+        configs: List<ProxyConfig>,
+        onProgress: ((PingProgress) -> Unit)? = null
+    ): ProxyConfig? = testAll(configs, onProgress).firstOrNull()
 }
