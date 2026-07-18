@@ -13,6 +13,14 @@ import com.autovpn.app.MainActivity
 import libv2ray.CoreController
 import libv2ray.Libv2ray
 
+/**
+ * NOTE ON THE GOMOBILE BINDING NAMES:
+ * The exact class/method names below (Libv2ray.newCoreController, CoreController, etc.)
+ * come from https://pkg.go.dev/github.com/2dust/AndroidLibXrayLite as of the version this
+ * project targets. gomobile sometimes renames things slightly between releases -
+ * after you add libv2ray.aar to app/libs, let Android Studio autocomplete confirm the
+ * exact names and adjust here if a rename happened upstream.
+ */
 class VpnTunnelService : VpnService() {
 
     companion object {
@@ -58,6 +66,9 @@ class VpnTunnelService : VpnService() {
     }
 
     private fun startTunnel(configJson: String) {
+        // Stop only the running Xray core loop, keep the TUN interface alive if we
+        // already have one (this is what makes "next config" instant and avoids
+        // asking for VPN permission again every time the user switches servers).
         try { coreController?.stopLoop() } catch (e: Exception) { }
         coreController = null
 
@@ -70,9 +81,11 @@ class VpnTunnelService : VpnService() {
                 .addDnsServer("8.8.8.8")
                 .setMtu(1500)
 
+            // Exclude our own app from the tunnel so Xray's own outbound connections
+            // go out directly instead of looping back into the VPN interface.
             try {
                 builder.addDisallowedApplication(packageName)
-            } catch (e: Exception) { }
+            } catch (e: Exception) { /* ignore */ }
 
             tunFd = builder.establish()
         }

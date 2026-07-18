@@ -5,11 +5,16 @@ import com.autovpn.app.model.SubscriptionEntry
 import org.json.JSONArray
 import org.json.JSONObject
 
+/**
+ * Persists the list of subscription URLs + their enabled/disabled checkbox state
+ * across app restarts (SharedPreferences, no DB needed for such a small list).
+ */
 object SubscriptionStore {
 
     private const val PREFS = "subscriptions_prefs"
     private const val KEY = "subscriptions_json"
 
+    // Original two subscriptions, used only the very first time the app runs.
     private val DEFAULT_URLS = listOf(
         "https://raw.githubusercontent.com/roosterkid/openproxylist/main/V2RAY_RAW.txt",
         "https://raw.githubusercontent.com/TheConfigs/hcaptcha-configs/main/hcaptchaCONFIGS.txt"
