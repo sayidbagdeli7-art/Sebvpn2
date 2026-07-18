@@ -221,12 +221,13 @@ class MainActivity : ComponentActivity() {
                                         state = ConnState.CONNECTING
                                         connectToIndex(0)
                                         state = ConnState.CONNECTED
+                                    }
                                 }
                             },
                             modifier = Modifier.size(160.dp),
                             shape = CircleShape
                         ) {
-                            Text(if (state == ConnState.CONNECTED) "کنفیگ بعدی" else "اتصال")
+                            Text(if (state == ConnState.CONNECTED) "کانفیگ بعدی" else "اتصال")
                         }
 
                         Spacer(Modifier.height(16.dp))
@@ -257,7 +258,7 @@ class MainActivity : ComponentActivity() {
                             )
                         },
                         confirmButton = {
-                            TextButton(onClick = { 
+                            TextButton(onClick = {
                                 if (newUrl.isNotBlank()) {
                                     subscriptions = SubscriptionStore.addUrl(this@MainActivity, newUrl.trim())
                                 }
