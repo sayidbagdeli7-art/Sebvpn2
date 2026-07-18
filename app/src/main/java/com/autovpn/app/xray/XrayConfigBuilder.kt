@@ -13,27 +13,25 @@ import org.json.JSONArray
  */
 object XrayConfigBuilder {
 
-    private const val SOCKS_PORT = 10808
-
     fun buildFull(proxy: ProxyConfig, fragmentEnabled: Boolean = false): String {
         val root = JSONObject()
         root.put("log", JSONObject().put("loglevel", "warning"))
 
-        val inbound = JSONObject().apply {
-            put("tag", "socks-in")
-            put("listen", "127.0.0.1")
-            put("port", SOCKS_PORT)
-            put("protocol", "socks")
+        // This is the inbound that actually reads IP packets from the TUN file
+        // descriptor (the fd is passed separately via CoreController.startLoop / the
+        // xray.tun.fd env var, not through this JSON). Without this exact inbound,
+        // Xray never touches the TUN device at all - which is why pings could succeed
+        // (they open their own direct connection, bypassing the tunnel entirely) while
+        // real browsing traffic through the VPN interface went nowhere.
+        val tunInbound = JSONObject().apply {
+            put("port", 0)
+            put("protocol", "tun")
             put("settings", JSONObject().apply {
-                put("udp", true)
-                put("auth", "noauth")
-            })
-            put("sniffing", JSONObject().apply {
-                put("enabled", true)
-                put("destOverride", JSONArray(listOf("http", "tls")))
+                put("name", "xray0")
+                put("MTU", 1500)
             })
         }
-        root.put("inbounds", JSONArray().put(inbound))
+        root.put("inbounds", JSONArray().put(tunInbound))
 
         val proxyOutbound = JSONObject(proxy.xrayOutboundJson)
         val directOutbound = JSONObject().apply {
@@ -92,6 +90,4 @@ object XrayConfigBuilder {
         root.put("outbounds", JSONArray().put(JSONObject(proxy.xrayOutboundJson)))
         return root.toString()
     }
-
-    fun socksPort() = SOCKS_PORT
 }

@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun AppScreen() {
-        var state by remember { mutableStateOf(ConnState.DISCONNECTED) }
+        var state by remember { mutableStateOf(if (VpnTunnelService.isRunning) ConnState.CONNECTED else ConnState.DISCONNECTED) }
         var serverName by remember { mutableStateOf<String?>(null) }
         var pingMs by remember { mutableStateOf<Long?>(null) }
         var pingProgress by remember { mutableStateOf<PingProgress?>(null) }
@@ -72,6 +72,21 @@ class MainActivity : ComponentActivity() {
             } else {
                 startTunnelService(cfg, fragmentEnabled)
             }
+        }
+
+        fun disconnect() {
+            // Always send the stop command regardless of what the UI currently thinks
+            // the state is - this guarantees the button works even if the app's local
+            // state got out of sync with the actual running VpnService.
+            startService(Intent(this@MainActivity, VpnTunnelService::class.java).apply {
+                action = VpnTunnelService.ACTION_DISCONNECT
+            })
+            state = ConnState.DISCONNECTED
+            serverName = null
+            pingMs = null
+            pingProgress = null
+            pingedConfigs = emptyList()
+            currentIndex = 0
         }
 
         MaterialTheme {
@@ -206,30 +221,23 @@ class MainActivity : ComponentActivity() {
                                         state = ConnState.CONNECTING
                                         connectToIndex(0)
                                         state = ConnState.CONNECTED
-                                    }
                                 }
                             },
                             modifier = Modifier.size(160.dp),
                             shape = CircleShape
                         ) {
-                            Text(if (state == ConnState.CONNECTED) "کانفیگ بعدی" else "اتصال")
+                            Text(if (state == ConnState.CONNECTED) "کنفیگ بعدی" else "اتصال")
                         }
 
-                        if (state == ConnState.CONNECTED) {
-                            Spacer(Modifier.height(16.dp))
-                            TextButton(onClick = {
-                                startService(Intent(this@MainActivity, VpnTunnelService::class.java).apply {
-                                    action = VpnTunnelService.ACTION_DISCONNECT
-                                })
-                                state = ConnState.DISCONNECTED
-                                serverName = null
-                                pingMs = null
-                                pingProgress = null
-                                pingedConfigs = emptyList()
-                                currentIndex = 0
-                            }) {
-                                Text("قطع اتصال")
-                            }
+                        Spacer(Modifier.height(16.dp))
+                        OutlinedButton(
+                            onClick = { disconnect() },
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            ),
+                            modifier = Modifier.fillMaxWidth(0.7f)
+                        ) {
+                            Text("قطع اتصال (خاموش کردن کامل VPN)")
                         }
                     }
                 }
@@ -249,7 +257,7 @@ class MainActivity : ComponentActivity() {
                             )
                         },
                         confirmButton = {
-                            TextButton(onClick = { 
+                            TextButton(onClick = {
                                 if (newUrl.isNotBlank()) {
                                     subscriptions = SubscriptionStore.addUrl(this@MainActivity, newUrl.trim())
                                 }
