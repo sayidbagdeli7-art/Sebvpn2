@@ -15,7 +15,7 @@ object XrayConfigBuilder {
 
     private const val SOCKS_PORT = 10808
 
-    fun buildFull(proxy: ProxyConfig): String {
+    fun buildFull(proxy: ProxyConfig, fragmentEnabled: Boolean = false): String {
         val root = JSONObject()
         root.put("log", JSONObject().put("loglevel", "warning"))
 
@@ -44,11 +44,42 @@ object XrayConfigBuilder {
             put("protocol", "blackhole")
             put("tag", "block")
         }
-        root.put("outbounds", JSONArray().apply {
-            put(proxyOutbound)
-            put(directOutbound)
-            put(blockOutbound)
-        })
+
+        val outbounds = JSONArray()
+        if (fragmentEnabled) {
+            // "Fragment" splits the TLS ClientHello into small pieces to help get past
+            // DPI-based censorship (commonly needed inside Iran). It's a separate freedom
+            // outbound that the proxy outbound dials through via sockopt.dialerProxy.
+            val streamSettings = if (proxyOutbound.has("streamSettings")) {
+                proxyOutbound.getJSONObject("streamSettings")
+            } else {
+                JSONObject().also { proxyOutbound.put("streamSettings", it) }
+            }
+            val sockopt = if (streamSettings.has("sockopt")) {
+                streamSettings.getJSONObject("sockopt")
+            } else {
+                JSONObject().also { streamSettings.put("sockopt", it) }
+            }
+            sockopt.put("dialerProxy", "fragment-out")
+
+            val fragmentOutbound = JSONObject().apply {
+                put("protocol", "freedom")
+                put("tag", "fragment-out")
+                put("settings", JSONObject().apply {
+                    put("fragment", JSONObject().apply {
+                        put("packets", "tlshello")
+                        put("length", "10-20")
+                        put("interval", "10-20")
+                    })
+                })
+            }
+            outbounds.put(fragmentOutbound)
+        }
+
+        outbounds.put(proxyOutbound)
+        outbounds.put(directOutbound)
+        outbounds.put(blockOutbound)
+        root.put("outbounds", outbounds)
 
         return root.toString()
     }

@@ -31,12 +31,13 @@ enum class ConnState { DISCONNECTED, FETCHING, PINGING, CONNECTING, CONNECTED, E
 class MainActivity : ComponentActivity() {
 
     private var pendingBestConfig: ProxyConfig? = null
+    private var pendingFragmentEnabled: Boolean = false
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            pendingBestConfig?.let { startTunnelService(it) }
+            pendingBestConfig?.let { startTunnelService(it, pendingFragmentEnabled) }
         }
     }
 
@@ -55,6 +56,7 @@ class MainActivity : ComponentActivity() {
         var pingedConfigs by remember { mutableStateOf<List<ProxyConfig>>(emptyList()) }
         var currentIndex by remember { mutableStateOf(0) }
         var showAddDialog by remember { mutableStateOf(false) }
+        var fragmentEnabled by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
 
         fun connectToIndex(index: Int) {
@@ -63,11 +65,12 @@ class MainActivity : ComponentActivity() {
             serverName = cfg.name
             pingMs = cfg.pingMs
             pendingBestConfig = cfg
+            pendingFragmentEnabled = fragmentEnabled
             val vpnIntent = VpnService.prepare(this@MainActivity)
             if (vpnIntent != null) {
                 vpnPermissionLauncher.launch(vpnIntent)
             } else {
-                startTunnelService(cfg)
+                startTunnelService(cfg, fragmentEnabled)
             }
         }
 
@@ -111,6 +114,25 @@ class MainActivity : ComponentActivity() {
 
                     TextButton(onClick = { showAddDialog = true }, enabled = !isBusyGlobal) {
                         Text("+ افزودن سابسکریپشن جدید")
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    ) {
+                        Switch(
+                            checked = fragmentEnabled,
+                            onCheckedChange = { checked ->
+                                fragmentEnabled = checked
+                                // If we're already connected, re-apply immediately with the
+                                // new fragment setting (reuses the same TUN interface).
+                                if (state == ConnState.CONNECTED) {
+                                    connectToIndex(currentIndex)
+                                }
+                            }
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("فرگمنت (ضدفیلترینگ) — اگه پروکسی وصل نمی‌شد، روشن/خاموشش کن")
                     }
 
                     Spacer(Modifier.height(16.dp))
@@ -227,7 +249,7 @@ class MainActivity : ComponentActivity() {
                             )
                         },
                         confirmButton = {
-                            TextButton(onClick = {
+                            TextButton(onClick = { 
                                 if (newUrl.isNotBlank()) {
                                     subscriptions = SubscriptionStore.addUrl(this@MainActivity, newUrl.trim())
                                 }
@@ -243,8 +265,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startTunnelService(config: ProxyConfig) {
-        val fullConfig = XrayConfigBuilder.buildFull(config)
+    private fun startTunnelService(config: ProxyConfig, fragmentEnabled: Boolean = false) {
+        val fullConfig = XrayConfigBuilder.buildFull(config, fragmentEnabled)
         val intent = Intent(this, VpnTunnelService::class.java).apply {
             action = VpnTunnelService.ACTION_CONNECT
             putExtra(VpnTunnelService.EXTRA_CONFIG_JSON, fullConfig)
