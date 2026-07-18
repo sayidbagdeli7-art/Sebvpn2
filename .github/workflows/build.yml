@@ -24,10 +24,8 @@ jobs:
         run: |
           mkdir -p app/libs
           rm -f app/libs/PUT_libv2ray.aar_HERE.txt
-          URL=$(curl -s https://api.github.com/repos/2dust/AndroidLibXrayLite/releases/latest \
-            | grep "browser_download_url" | grep "libv2ray.aar" | head -n1 | cut -d '"' -f4)
-          echo "Downloading: $URL"
-          curl -L -o app/libs/libv2ray.aar "$URL"
+          curl -L -f -o app/libs/libv2ray.aar \
+            https://github.com/2dust/AndroidLibXrayLite/releases/latest/download/libv2ray.aar
           ls -la app/libs/
 
       - name: Set up Gradle
