@@ -30,13 +30,40 @@ object SubscriptionManager {
         links.distinct().mapNotNull { ShareLinkParser.parse(it) }
     }
 
-    private fun safeFetch(url: String): String? = try {
+    private fun safeFetch(url: String): String? {
+        val direct = tryFetch(url)
+        if (direct != null) return direct
+
+        // raw.githubusercontent.com is blocked by several Iranian mobile carriers.
+        // jsDelivr mirrors every public GitHub file and is rarely blocked (too many
+        // ordinary websites load their JS libraries from it for carriers to block it
+        // outright), so if the direct fetch fails, retry through that mirror.
+        val jsDelivrUrl = toJsDelivrMirror(url) ?: return null
+        return tryFetch(jsDelivrUrl)
+    }
+
+    private fun tryFetch(url: String): String? = try {
         val req = Request.Builder().url(url).build()
         client.newCall(req).execute().use { resp ->
             if (resp.isSuccessful) resp.body?.string() else null
         }
     } catch (e: Exception) {
         null
+    }
+
+    /**
+     * Converts https://raw.githubusercontent.com/USER/REPO/BRANCH/PATH
+     * into      https://cdn.jsdelivr.net/gh/USER/REPO@BRANCH/PATH
+     * Returns null if the URL isn't a raw.githubusercontent.com link.
+     */
+    private fun toJsDelivrMirror(url: String): String? {
+        val prefix = "https://raw.githubusercontent.com/"
+        if (!url.startsWith(prefix)) return null
+        val rest = url.removePrefix(prefix) // USER/REPO/BRANCH/PATH...
+        val parts = rest.split("/", limit = 4)
+        if (parts.size < 4) return null
+        val (user, repo, branch, path) = parts
+        return "https://cdn.jsdelivr.net/gh/$user/$repo@$branch/$path"
     }
 
     private fun extractLinks(body: String): List<String> {
