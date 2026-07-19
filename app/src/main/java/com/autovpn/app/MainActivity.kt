@@ -9,7 +9,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -89,156 +92,181 @@ class MainActivity : ComponentActivity() {
             currentIndex = 0
         }
 
+        val isBusyGlobal = state == ConnState.FETCHING || state == ConnState.PINGING || state == ConnState.CONNECTING
+
         MaterialTheme {
             Surface(modifier = Modifier.fillMaxSize()) {
-                Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-
-                    Text("سابسکریپشن‌ها", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(4.dp))
-
-                    val isBusyGlobal = state == ConnState.FETCHING || state == ConnState.PINGING || state == ConnState.CONNECTING
-
-                    LazyColumn(modifier = Modifier.weight(1f, fill = false).heightIn(max = 220.dp)) {
-                        items(subscriptions) { sub ->
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
-                            ) {
-                                Checkbox(
-                                    checked = sub.enabled,
-                                    enabled = !isBusyGlobal,
-                                    onCheckedChange = { checked ->
-                                        subscriptions = SubscriptionStore.setEnabled(this@MainActivity, sub.url, checked)
-                                    }
-                                )
-                                Text(
-                                    sub.url,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                TextButton(
-                                    enabled = !isBusyGlobal,
-                                    onClick = {
-                                        subscriptions = SubscriptionStore.remove(this@MainActivity, sub.url)
-                                    }
-                                ) { Text("حذف") }
-                            }
-                        }
-                    }
-
-                    TextButton(onClick = { showAddDialog = true }, enabled = !isBusyGlobal) {
-                        Text("+ افزودن سابسکریپشن جدید")
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                    ) {
-                        Switch(
-                            checked = fragmentEnabled,
-                            onCheckedChange = { checked ->
-                                fragmentEnabled = checked
-                                if (state == ConnState.CONNECTED) {
-                                    connectToIndex(currentIndex)
-                                }
-                            }
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text("فرگمنت (ضدفیلترینگ) — اگه پروکسی وصل نمی‌شد، روشن/خاموشش کن")
-                    }
-
-                    Spacer(Modifier.height(16.dp))
-                    HorizontalDivider()
-                    Spacer(Modifier.height(16.dp))
+                // Outer column: a SCROLLABLE section on top (everything except the
+                // disconnect button) + the disconnect button FIXED at the very bottom
+                // of the screen, always in the same place no matter how much text
+                // appears above it (server name / ping / config count, etc.)
+                Column(modifier = Modifier.fillMaxSize()) {
 
                     Column(
-                        modifier = Modifier.fillMaxWidth().weight(1f),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                            .padding(16.dp)
                     ) {
-                        Text(
-                            text = when (state) {
-                                ConnState.DISCONNECTED -> "قطع"
-                                ConnState.FETCHING -> "در حال دریافت سابسکریپشن‌ها..."
-                                ConnState.PINGING -> "در حال تست پینگ سرورها..."
-                                ConnState.CONNECTING -> "در حال اتصال..."
-                                ConnState.CONNECTED -> "متصل"
-                                ConnState.ERROR -> "خطا - سرور مناسب پیدا نشد"
-                            },
-                            style = MaterialTheme.typography.headlineSmall
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        if (serverName != null) Text("سرور: $serverName")
-                        if (pingMs != null) Text("پینگ: ${pingMs} ms")
-                        if (state == ConnState.CONNECTED && pingedConfigs.isNotEmpty()) {
-                            Text("کانفیگ ${currentIndex + 1} از ${pingedConfigs.size}")
-                        }
-                        if (state == ConnState.PINGING && pingProgress != null) {
-                            val p = pingProgress!!
-                            Spacer(Modifier.height(4.dp))
-                            Text("کل کانفیگ‌ها: ${p.total}")
-                            Text("پینگ‌خورده (موفق): ${p.succeeded}")
-                            Text("پینگ‌نخورده (ناموفق): ${p.failed}")
-                        }
-                        Spacer(Modifier.height(32.dp))
 
-                        val isBusy = isBusyGlobal
+                        Text("سابسکریپشن‌ها", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(4.dp))
 
-                        Button(
-                            enabled = !isBusy,
-                            onClick = {
-                                if (state == ConnState.CONNECTED) {
-                                    if (pingedConfigs.isNotEmpty()) {
-                                        val nextIndex = (currentIndex + 1) % pingedConfigs.size
-                                        connectToIndex(nextIndex)
-                                    }
-                                } else {
-                                    scope.launch {
-                                        state = ConnState.FETCHING
-                                        pingProgress = null
-                                        val enabledUrls = subscriptions.filter { it.enabled }.map { it.url }
-                                        if (enabledUrls.isEmpty()) {
-                                            state = ConnState.ERROR
-                                            return@launch
+                        LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
+                            items(subscriptions) { sub ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                                ) {
+                                    Checkbox(
+                                        checked = sub.enabled,
+                                        enabled = !isBusyGlobal,
+                                        onCheckedChange = { checked ->
+                                            subscriptions = SubscriptionStore.setEnabled(this@MainActivity, sub.url, checked)
                                         }
-                                        val configs = SubscriptionManager.fetchAll(enabledUrls)
-                                        if (configs.isEmpty()) {
-                                            state = ConnState.ERROR
-                                            return@launch
+                                    )
+                                    Text(
+                                        sub.url,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(
+                                        enabled = !isBusyGlobal,
+                                        onClick = {
+                                            subscriptions = SubscriptionStore.remove(this@MainActivity, sub.url)
                                         }
-                                        state = ConnState.PINGING
-                                        val sorted = PingTester.testAll(configs) { progress ->
-                                            scope.launch(Dispatchers.Main) { pingProgress = progress }
-                                        }
-                                        if (sorted.isEmpty()) {
-                                            state = ConnState.ERROR
-                                            return@launch
-                                        }
-                                        pingedConfigs = sorted
-                                        state = ConnState.CONNECTING
-                                        connectToIndex(0)
-                                        state = ConnState.CONNECTED
+                                    ) { Text("حذف") }
+                                }
+                            }
+                        }
+
+                        TextButton(onClick = { showAddDialog = true }, enabled = !isBusyGlobal) {
+                            Text("+ افزودن سابسکریپشن جدید")
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                        ) {
+                            Switch(
+                                checked = fragmentEnabled,
+                                onCheckedChange = { checked ->
+                                    fragmentEnabled = checked
+                                    if (state == ConnState.CONNECTED) {
+                                        connectToIndex(currentIndex)
                                     }
                                 }
-                            },
-                            modifier = Modifier.size(160.dp),
-                            shape = CircleShape
-                        ) {
-                            Text(if (state == ConnState.CONNECTED) "کانفیگ بعدی" else "اتصال")
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("فرگمنت (ضدفیلترینگ) — اگه پروکسی وصل نمی‌شد، روشن/خاموشش کن")
                         }
 
-                        Spacer(Modifier.height(20.dp))
+                        Spacer(Modifier.height(16.dp))
+                        HorizontalDivider()
+                        Spacer(Modifier.height(16.dp))
+
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = when (state) {
+                                    ConnState.DISCONNECTED -> "قطع"
+                                    ConnState.FETCHING -> "در حال دریافت سابسکریپشن‌ها..."
+                                    ConnState.PINGING -> "در حال تست پینگ سرورها..."
+                                    ConnState.CONNECTING -> "در حال اتصال..."
+                                    ConnState.CONNECTED -> "متصل"
+                                    ConnState.ERROR -> "خطا - سرور مناسب پیدا نشد"
+                                },
+                                style = MaterialTheme.typography.headlineSmall
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            if (serverName != null) Text("سرور: $serverName")
+                            if (pingMs != null) Text("پینگ: ${pingMs} ms")
+                            if (state == ConnState.CONNECTED && pingedConfigs.isNotEmpty()) {
+                                Text("کانفیگ ${currentIndex + 1} از ${pingedConfigs.size}")
+                            }
+                            if (state == ConnState.PINGING && pingProgress != null) {
+                                val p = pingProgress!!
+                                Spacer(Modifier.height(4.dp))
+                                Text("کل کانفیگ‌ها: ${p.total}")
+                                Text("پینگ‌خورده (موفق): ${p.succeeded}")
+                                Text("پینگ‌نخورده (ناموفق): ${p.failed}")
+                            }
+                            Spacer(Modifier.height(32.dp))
+
+                            Button(
+                                enabled = !isBusyGlobal,
+                                onClick = {
+                                    if (state == ConnState.CONNECTED) {
+                                        if (pingedConfigs.isNotEmpty()) {
+                                            val nextIndex = (currentIndex + 1) % pingedConfigs.size
+                                            connectToIndex(nextIndex)
+                                        }
+                                    } else {
+                                        scope.launch {
+                                            state = ConnState.FETCHING
+                                            pingProgress = null
+                                            val enabledUrls = subscriptions.filter { it.enabled }.map { it.url }
+                                            if (enabledUrls.isEmpty()) {
+                                                state = ConnState.ERROR
+                                                return@launch
+                                            }
+                                            val configs = SubscriptionManager.fetchAll(enabledUrls)
+                                            if (configs.isEmpty()) {
+                                                state = ConnState.ERROR
+                                                return@launch
+                                            }
+                                            state = ConnState.PINGING
+                                            val sorted = PingTester.testAll(configs) { progress ->
+                                                scope.launch(Dispatchers.Main) { pingProgress = progress }
+                                            }
+                                            if (sorted.isEmpty()) {
+                                                state = ConnState.ERROR
+                                                return@launch
+                                            }
+                                            pingedConfigs = sorted
+                                            state = ConnState.CONNECTING
+                                            connectToIndex(0)
+                                            state = ConnState.CONNECTED
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.size(160.dp),
+                                shape = CircleShape
+                            ) {
+                                Text(if (state == ConnState.CONNECTED) "کانفیگ بعدی" else "اتصال")
+                            }
+
+                            // Extra bottom padding so the last bit of scrollable content
+                            // never hides behind the fixed disconnect bar below.
+                            Spacer(Modifier.height(24.dp))
+                        }
+                    }
+
+                    // Fixed bar at the very bottom of the screen - always visible,
+                    // never moves, regardless of what's happening above.
+                    HorizontalDivider()
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Button(
                             onClick = { disconnect() },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.error
                             ),
-                            modifier = Modifier.fillMaxWidth(0.75f).height(52.dp)
+                            shape = RoundedCornerShape(0.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(64.dp)
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
                         ) {
-                            Text("⏻", style = MaterialTheme.typography.headlineSmall)
-                            Spacer(Modifier.width(10.dp))
-                            Text("قطع اتصال")
+                            Text(
+                                "⏻  قطع اتصال",
+                                style = MaterialTheme.typography.titleMedium
+                            )
                         }
                     }
                 }
