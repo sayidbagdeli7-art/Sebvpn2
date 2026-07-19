@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,7 +19,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.autovpn.app.model.ProxyConfig
-import com.autovpn.app.subscription.CdnFrontStore
 import com.autovpn.app.subscription.SubscriptionManager
 import com.autovpn.app.subscription.SubscriptionStore
 import com.autovpn.app.vpn.VpnTunnelService
@@ -33,13 +34,12 @@ class MainActivity : ComponentActivity() {
 
     private var pendingBestConfig: ProxyConfig? = null
     private var pendingFragmentEnabled: Boolean = false
-    private var pendingCdnFrontDomain: String? = null
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            pendingBestConfig?.let { startTunnelService(it, pendingFragmentEnabled, pendingCdnFrontDomain) }
+            pendingBestConfig?.let { startTunnelService(it, pendingFragmentEnabled) }
         }
     }
 
@@ -59,54 +59,20 @@ class MainActivity : ComponentActivity() {
         var currentIndex by remember { mutableStateOf(0) }
         var showAddDialog by remember { mutableStateOf(false) }
         var fragmentEnabled by remember { mutableStateOf(false) }
-        var cdnFrontDomain by remember { mutableStateOf(CdnFrontStore.load(this@MainActivity)) }
-        var showCdnDialog by remember { mutableStateOf(false) }
-        var usingCdnFront by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
 
-        fun connectToIndex(index: Int, useCdnFront: Boolean = usingCdnFront) {
+        fun connectToIndex(index: Int) {
             val cfg = pingedConfigs.getOrNull(index) ?: return
             currentIndex = index
-            usingCdnFront = useCdnFront
             serverName = cfg.name
             pingMs = cfg.pingMs
             pendingBestConfig = cfg
             pendingFragmentEnabled = fragmentEnabled
-            pendingCdnFrontDomain = if (useCdnFront) cdnFrontDomain else null
             val vpnIntent = VpnService.prepare(this@MainActivity)
             if (vpnIntent != null) {
                 vpnPermissionLauncher.launch(vpnIntent)
             } else {
-                startTunnelService(cfg, fragmentEnabled, if (useCdnFront) cdnFrontDomain else null)
-            }
-        }
-
-        fun startConnectFlow(useCdnFront: Boolean) {
-            scope.launch {
-                state = ConnState.FETCHING
-                pingProgress = null
-                val enabledUrls = subscriptions.filter { it.enabled }.map { it.url }
-                if (enabledUrls.isEmpty()) {
-                    state = ConnState.ERROR
-                    return@launch
-                }
-                val configs = SubscriptionManager.fetchAll(enabledUrls)
-                if (configs.isEmpty()) {
-                    state = ConnState.ERROR
-                    return@launch
-                }
-                state = ConnState.PINGING
-                val sorted = PingTester.testAll(configs) { progress ->
-                    scope.launch(Dispatchers.Main) { pingProgress = progress }
-                }
-                if (sorted.isEmpty()) {
-                    state = ConnState.ERROR
-                    return@launch
-                }
-                pingedConfigs = sorted
-                state = ConnState.CONNECTING
-                connectToIndex(0, useCdnFront)
-                state = ConnState.CONNECTED
+                startTunnelService(cfg, fragmentEnabled)
             }
         }
 
@@ -123,7 +89,6 @@ class MainActivity : ComponentActivity() {
             pingProgress = null
             pingedConfigs = emptyList()
             currentIndex = 0
-            usingCdnFront = false
         }
 
         MaterialTheme {
@@ -176,8 +141,6 @@ class MainActivity : ComponentActivity() {
                             checked = fragmentEnabled,
                             onCheckedChange = { checked ->
                                 fragmentEnabled = checked
-                                // If we're already connected, re-apply immediately with the
-                                // new fragment setting (reuses the same TUN interface).
                                 if (state == ConnState.CONNECTED) {
                                     connectToIndex(currentIndex)
                                 }
@@ -233,7 +196,32 @@ class MainActivity : ComponentActivity() {
                                         connectToIndex(nextIndex)
                                     }
                                 } else {
-                                    startConnectFlow(false)
+                                    scope.launch {
+                                        state = ConnState.FETCHING
+                                        pingProgress = null
+                                        val enabledUrls = subscriptions.filter { it.enabled }.map { it.url }
+                                        if (enabledUrls.isEmpty()) {
+                                            state = ConnState.ERROR
+                                            return@launch
+                                        }
+                                        val configs = SubscriptionManager.fetchAll(enabledUrls)
+                                        if (configs.isEmpty()) {
+                                            state = ConnState.ERROR
+                                            return@launch
+                                        }
+                                        state = ConnState.PINGING
+                                        val sorted = PingTester.testAll(configs) { progress ->
+                                            scope.launch(Dispatchers.Main) { pingProgress = progress }
+                                        }
+                                        if (sorted.isEmpty()) {
+                                            state = ConnState.ERROR
+                                            return@launch
+                                        }
+                                        pingedConfigs = sorted
+                                        state = ConnState.CONNECTING
+                                        connectToIndex(0)
+                                        state = ConnState.CONNECTED
+                                    }
                                 }
                             },
                             modifier = Modifier.size(160.dp),
@@ -242,44 +230,21 @@ class MainActivity : ComponentActivity() {
                             Text(if (state == ConnState.CONNECTED) "کانفیگ بعدی" else "اتصال")
                         }
 
-                        Spacer(Modifier.height(16.dp))
-                        OutlinedButton(
-                            enabled = !isBusy,
-                            onClick = {
-                                if (cdnFrontDomain.isBlank()) {
-                                    showCdnDialog = true
-                                } else if (state == ConnState.CONNECTED && usingCdnFront) {
-                                    if (pingedConfigs.isNotEmpty()) {
-                                        val nextIndex = (currentIndex + 1) % pingedConfigs.size
-                                        connectToIndex(nextIndex, true)
-                                    }
-                                } else {
-                                    startConnectFlow(true)
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(0.7f)
-                        ) {
-                            Text(
-                                if (state == ConnState.CONNECTED && usingCdnFront)
-                                    "کانفیگ بعدی (CDN Fronting)"
-                                else "اتصال با CDN Fronting"
-                            )
-                        }
-                        if (cdnFrontDomain.isNotBlank()) {
-                            TextButton(onClick = { showCdnDialog = true }, enabled = !isBusy) {
-                                Text("دامنه‌ی Fronting: $cdnFrontDomain (ویرایش)")
-                            }
-                        }
-
-                        Spacer(Modifier.height(16.dp))
-                        OutlinedButton(
+                        Spacer(Modifier.height(20.dp))
+                        Button(
                             onClick = { disconnect() },
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.error
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error
                             ),
-                            modifier = Modifier.fillMaxWidth(0.7f)
+                            modifier = Modifier.fillMaxWidth(0.75f).height(52.dp)
                         ) {
-                            Text("قطع اتصال (خاموش کردن کامل VPN)")
+                            Icon(
+                                imageVector = Icons.Filled.PowerSettingsNew,
+                                contentDescription = "قطع اتصال",
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("قطع اتصال")
                         }
                     }
                 }
@@ -311,43 +276,12 @@ class MainActivity : ComponentActivity() {
                         }
                     )
                 }
-
-                if (showCdnDialog) {
-                    var domainInput by remember { mutableStateOf(cdnFrontDomain) }
-                    AlertDialog(
-                        onDismissRequest = { showCdnDialog = false },
-                        title = { Text("دامنه‌ی CDN Fronting") },
-                        text = {
-                            Column {
-                                Text("یه دامنه‌ی مجاز که پشت همون CDN سرورت باشه وارد کن (مثلاً یه ساب‌دامین از cloudflare یا هر CDN دیگه‌ای که سرورت پشتشه). این باید خودت از قبل بدونی/تست کرده باشی.")
-                                Spacer(Modifier.height(8.dp))
-                                OutlinedTextField(
-                                    value = domainInput,
-                                    onValueChange = { domainInput = it },
-                                    placeholder = { Text("example.com") },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                            }
-                        },
-                        confirmButton = {
-                            TextButton(onClick = {
-                                cdnFrontDomain = domainInput.trim()
-                                CdnFrontStore.save(this@MainActivity, cdnFrontDomain)
-                                showCdnDialog = false
-                            }) { Text("ذخیره") }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { showCdnDialog = false }) { Text("انصراف") }
-                        }
-                    )
-                }
             }
         }
     }
 
-    private fun startTunnelService(config: ProxyConfig, fragmentEnabled: Boolean = false, cdnFrontDomain: String? = null) {
-        val fullConfig = XrayConfigBuilder.buildFull(config, fragmentEnabled, cdnFrontDomain)
+    private fun startTunnelService(config: ProxyConfig, fragmentEnabled: Boolean = false) {
+        val fullConfig = XrayConfigBuilder.buildFull(config, fragmentEnabled)
         val intent = Intent(this, VpnTunnelService::class.java).apply {
             action = VpnTunnelService.ACTION_CONNECT
             putExtra(VpnTunnelService.EXTRA_CONFIG_JSON, fullConfig)

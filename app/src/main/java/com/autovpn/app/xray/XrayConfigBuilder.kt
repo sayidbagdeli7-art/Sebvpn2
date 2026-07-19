@@ -13,7 +13,7 @@ import org.json.JSONArray
  */
 object XrayConfigBuilder {
 
-    fun buildFull(proxy: ProxyConfig, fragmentEnabled: Boolean = false, cdnFrontDomain: String? = null): String {
+    fun buildFull(proxy: ProxyConfig, fragmentEnabled: Boolean = false): String {
         val root = JSONObject()
         root.put("log", JSONObject().put("loglevel", "warning"))
 
@@ -34,28 +34,6 @@ object XrayConfigBuilder {
         root.put("inbounds", JSONArray().put(tunInbound))
 
         val proxyOutbound = JSONObject(proxy.xrayOutboundJson)
-
-        if (!cdnFrontDomain.isNullOrBlank()) {
-            // Domain (CDN) fronting: the TLS handshake shows the censor an allowed
-            // "front" domain (the SNI), while the WS Host header - only visible to the
-            // CDN once traffic is decrypted at their edge - still points at the real
-            // backend, so the CDN routes it correctly. Only the SNI changes here; the
-            // Host header (set when the share-link was parsed) is left untouched.
-            val streamSettingsForFront = if (proxyOutbound.has("streamSettings")) {
-                proxyOutbound.getJSONObject("streamSettings")
-            } else {
-                JSONObject().also { proxyOutbound.put("streamSettings", it) }
-            }
-            if (streamSettingsForFront.optString("security") != "reality") {
-                val tlsSettings = if (streamSettingsForFront.has("tlsSettings")) {
-                    streamSettingsForFront.getJSONObject("tlsSettings")
-                } else {
-                    JSONObject().also { streamSettingsForFront.put("tlsSettings", it) }
-                }
-                tlsSettings.put("serverName", cdnFrontDomain)
-                streamSettingsForFront.put("security", "tls")
-            }
-        }
 
         val directOutbound = JSONObject().apply {
             put("protocol", "freedom")
