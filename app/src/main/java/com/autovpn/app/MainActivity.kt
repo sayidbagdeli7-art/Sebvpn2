@@ -10,8 +10,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -238,12 +236,8 @@ class MainActivity : ComponentActivity() {
                             ),
                             modifier = Modifier.fillMaxWidth(0.75f).height(52.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Filled.PowerSettingsNew,
-                                contentDescription = "قطع اتصال",
-                                modifier = Modifier.size(24.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
+                            Text("⏻", style = MaterialTheme.typography.headlineSmall)
+                            Spacer(Modifier.width(10.dp))
                             Text("قطع اتصال")
                         }
                     }
