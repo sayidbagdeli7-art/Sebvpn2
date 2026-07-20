@@ -22,7 +22,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.autovpn.app.model.NewsMessage
 import com.autovpn.app.model.ProxyConfig
+import com.autovpn.app.news.GitHubChannelSync
 import com.autovpn.app.news.NewsRepository
+import com.autovpn.app.subscription.ChannelStore
+import com.autovpn.app.subscription.GitHubTokenStore
 import com.autovpn.app.subscription.SubscriptionManager
 import com.autovpn.app.subscription.SubscriptionStore
 import com.autovpn.app.vpn.VpnTunnelService
@@ -84,20 +87,57 @@ class MainActivity : ComponentActivity() {
         var news by remember { mutableStateOf<List<NewsMessage>>(emptyList()) }
         var loading by remember { mutableStateOf(false) }
         var loadedOnce by remember { mutableStateOf(false) }
+        var channels by remember { mutableStateOf(ChannelStore.load(this@MainActivity)) }
+        var showAddChannelDialog by remember { mutableStateOf(false) }
+        var showTokenDialog by remember { mutableStateOf(false) }
+        var githubToken by remember { mutableStateOf(GitHubTokenStore.load(this@MainActivity)) }
+        var syncStatus by remember { mutableStateOf<String?>(null) }
         val scope = rememberCoroutineScope()
 
         fun refresh() {
             scope.launch {
                 loading = true
-                news = NewsRepository.fetchChannel("IranintlTV")
+                news = NewsRepository.fetchAll(channels).sortedByDescending { it.id }
                 loading = false
                 loadedOnce = true
             }
         }
 
-        LaunchedEffect(Unit) { refresh() }
+        LaunchedEffect(channels) { refresh() }
 
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text("کانال‌های تلگرام", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                TextButton(onClick = { showTokenDialog = true }) {
+                    Text(if (githubToken.isBlank()) "تنظیم توکن گیت‌هاب" else "توکن تنظیم شده ✓")
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+
+            channels.forEach { ch ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                ) {
+                    Text("@$ch", modifier = Modifier.weight(1f))
+                    TextButton(onClick = {
+                        channels = ChannelStore.removeChannel(this@MainActivity, ch)
+                    }) { Text("حذف") }
+                }
+            }
+
+            TextButton(onClick = { showAddChannelDialog = true }) {
+                Text("+ افزودن کانال جدید")
+            }
+
+            if (syncStatus != null) {
+                Text(syncStatus!!, style = MaterialTheme.typography.labelSmall)
+            }
+
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(8.dp))
+
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
@@ -110,13 +150,21 @@ class MainActivity : ComponentActivity() {
             Spacer(Modifier.height(8.dp))
 
             if (loadedOnce && news.isEmpty() && !loading) {
-                Text("خبری پیدا نشد (شاید هنوز اولین بار خودکارسازی گیت‌هاب اجرا نشده).")
+                Text("خبری پیدا نشد. اگه کانال جدید اضافه کردی و چیزی نیومد، VPN همین اپ رو روشن کن و دوباره بروزرسانی بزن.")
             }
 
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(news) { item ->
                     Card(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
                         Column(modifier = Modifier.padding(12.dp)) {
+                            if (channels.size > 1) {
+                                Text(
+                                    "@${item.channel}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(Modifier.height(2.dp))
+                            }
                             Text(
                                 item.text,
                                 maxLines = 6,
@@ -140,6 +188,75 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+
+        if (showAddChannelDialog) {
+            var newChannel by remember { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = { showAddChannelDialog = false },
+                title = { Text("افزودن کانال تلگرام") },
+                text = {
+                    OutlinedTextField(
+                        value = newChannel,
+                        onValueChange = { newChannel = it },
+                        placeholder = { Text("@channel یا آدرس t.me/channel") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        if (newChannel.isNotBlank()) {
+                            channels = ChannelStore.addChannel(this@MainActivity, newChannel.trim())
+                            val cleaned = newChannel.trim().removePrefix("https://t.me/").removePrefix("t.me/").removePrefix("@")
+                            scope.launch {
+                                syncStatus = "در حال ثبت توی گیت‌هاب..."
+                                when (val result = GitHubChannelSync.addChannel(githubToken, cleaned)) {
+                                    is GitHubChannelSync.Result.Success ->
+                                        syncStatus = "ثبت شد ✓ (تا ۱-۲ دقیقه دیگه از jsDelivr هم در دسترسه)"
+                                    is GitHubChannelSync.Result.Error ->
+                                        syncStatus = "فقط محلی اضافه شد (گیت‌هاب: ${result.message})"
+                                }
+                            }
+                        }
+                        showAddChannelDialog = false
+                    }) { Text("افزودن") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showAddChannelDialog = false }) { Text("انصراف") }
+                }
+            )
+        }
+
+        if (showTokenDialog) {
+            var tokenInput by remember { mutableStateOf(githubToken) }
+            AlertDialog(
+                onDismissRequest = { showTokenDialog = false },
+                title = { Text("توکن گیت‌هاب") },
+                text = {
+                    Column {
+                        Text("این توکن فقط روی همین گوشی ذخیره می‌مونه و فقط برای اضافه‌کردن اسم کانال به فایل channels.txt استفاده می‌شه.")
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = tokenInput,
+                            onValueChange = { tokenInput = it },
+                            placeholder = { Text("ghp_...") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        githubToken = tokenInput.trim()
+                        GitHubTokenStore.save(this@MainActivity, githubToken)
+                        showTokenDialog = false
+                    }) { Text("ذخیره") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showTokenDialog = false }) { Text("انصراف") }
+                }
+            )
         }
     }
 
