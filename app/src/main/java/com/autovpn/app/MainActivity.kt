@@ -22,10 +22,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.autovpn.app.model.NewsMessage
 import com.autovpn.app.model.ProxyConfig
-import com.autovpn.app.news.GitHubChannelSync
 import com.autovpn.app.news.NewsRepository
-import com.autovpn.app.subscription.ChannelStore
-import com.autovpn.app.subscription.GitHubTokenStore
 import com.autovpn.app.subscription.SubscriptionManager
 import com.autovpn.app.subscription.SubscriptionStore
 import com.autovpn.app.vpn.VpnTunnelService
