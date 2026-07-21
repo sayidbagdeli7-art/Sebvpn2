@@ -67,12 +67,24 @@ object SubscriptionManager {
     }
 
     private fun extractLinks(body: String): List<String> {
-        val trimmed = body.trim()
-        val looksLikeLinks = trimmed.lines().any {
-            it.startsWith("vmess://") || it.startsWith("vless://") ||
-            it.startsWith("trojan://") || it.startsWith("ss://")
+        val trimmed = body.trim().removePrefix("\uFEFF") // strip UTF-8 BOM if present
+
+        val found = mutableListOf<String>()
+
+        // 1) Any protocol links present directly in the raw text.
+        found.addAll(extractProtocolLines(trimmed))
+
+        // 2) Also try decoding the whole thing as base64 (standard AND URL-safe variants) -
+        // some subscriptions are 100% base64, some are plain links, and we don't want to
+        // guess wrong and silently drop everything. Try both, keep whatever we find.
+        decodeBase64Safe(trimmed)?.let { decoded ->
+            found.addAll(extractProtocolLines(decoded))
         }
-        val text = if (looksLikeLinks) trimmed else decodeBase64Safe(trimmed) ?: trimmed
+
+        return found.distinct()
+    }
+
+    private fun extractProtocolLines(text: String): List<String> {
         return text.lines()
             .map { it.trim() }
             .filter {
@@ -82,8 +94,11 @@ object SubscriptionManager {
     }
 
     private fun decodeBase64Safe(s: String): String? = try {
-        val cleaned = s.replace("\n", "").replace("\r", "")
-        val padded = cleaned + "=".repeat((4 - cleaned.length % 4) % 4)
+        val cleaned = s.replace("\n", "").replace("\r", "").replace(" ", "")
+        // Support both standard base64 (+ /) and URL-safe base64 (- _), since different
+        // subscription generators use either variant.
+        val normalized = cleaned.replace('-', '+').replace('_', '/')
+        val padded = normalized + "=".repeat((4 - normalized.length % 4) % 4)
         String(Base64.decode(padded, Base64.DEFAULT))
     } catch (e: Exception) {
         null
