@@ -7,6 +7,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import libv2ray.Libv2ray
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -25,7 +26,13 @@ data class PingProgress(
 object PingTester {
 
     private const val TEST_URL = "https://www.gstatic.com/generate_204"
-    private const val MAX_PARALLEL = 6
+    // Pinging is bounded by network I/O (waiting on TLS handshakes), not CPU, so a much
+    // higher parallelism is safe and cuts total wall-clock time a lot when there are
+    // 100+ configs to test.
+    private const val MAX_PARALLEL = 30
+    // Cap on any single config's test, so a handful of slow/hanging servers can't drag
+    // out the whole batch - they just count as failed once this elapses.
+    private const val PER_TEST_TIMEOUT_MS = 6000L
 
     /**
      * Tests every config concurrently and returns the same list, sorted best-ping-first.
@@ -44,11 +51,13 @@ object PingTester {
         val jobs = configs.map { cfg ->
             async {
                 semaphore.withPermit {
-                    cfg.pingMs = try {
-                        Libv2ray.measureOutboundDelay(XrayConfigBuilder.buildForPing(cfg), TEST_URL)
-                    } catch (e: Exception) {
-                        -2L
-                    }
+                    cfg.pingMs = withTimeoutOrNull(PER_TEST_TIMEOUT_MS) {
+                        try {
+                            Libv2ray.measureOutboundDelay(XrayConfigBuilder.buildForPing(cfg), TEST_URL)
+                        } catch (e: Exception) {
+                            -2L
+                        }
+                    } ?: -2L
                     if (cfg.pingMs > 0) succeeded.incrementAndGet() else failed.incrementAndGet()
                     onProgress?.invoke(PingProgress(total, succeeded.get(), failed.get()))
                 }
