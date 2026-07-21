@@ -3,7 +3,6 @@ package com.autovpn.app.parser
 import android.util.Base64
 import com.autovpn.app.model.ProxyConfig
 import org.json.JSONObject
-import java.net.URI
 import java.net.URLDecoder
 
 /**
@@ -111,13 +110,44 @@ object ShareLinkParser {
         return ProxyConfig(link, "vmess", ps, add, port, outbound.toString())
     }
 
+    /** Splits scheme://userinfo@host:port?query#fragment without java.net.URI, which is
+     *  far too strict for real-world links (raw emoji/spaces in the fragment, "&amp;"
+     *  instead of "&", etc. - all things v2rayNG-style subscriptions commonly contain
+     *  and that URI() would throw on, silently dropping the whole config). */
+    private data class RawParts(val userinfo: String, val host: String, val port: Int, val query: String, val fragment: String?)
+
+    private fun splitLink(link: String, scheme: String): RawParts {
+        val noScheme = link.removePrefix(scheme)
+        val hashIdx = noScheme.indexOf('#')
+        val beforeHash = if (hashIdx >= 0) noScheme.substring(0, hashIdx) else noScheme
+        val fragment = if (hashIdx >= 0) noScheme.substring(hashIdx + 1) else null
+
+        val atIdx = beforeHash.indexOf('@')
+        val userinfo = if (atIdx >= 0) beforeHash.substring(0, atIdx) else ""
+        val afterAt = if (atIdx >= 0) beforeHash.substring(atIdx + 1) else beforeHash
+
+        val qIdx = afterAt.indexOf('?')
+        val hostPort = if (qIdx >= 0) afterAt.substring(0, qIdx) else afterAt
+        val query = if (qIdx >= 0) afterAt.substring(qIdx + 1) else ""
+
+        val host = hostPort.substringBeforeLast(':').ifBlank { hostPort }
+        val port = hostPort.substringAfterLast(':').toIntOrNull() ?: 443
+
+        return RawParts(userinfo, host, port, query, fragment)
+    }
+
+    private fun decodeNameSafe(raw: String?, fallback: String): String {
+        if (raw.isNullOrBlank()) return fallback
+        return try { URLDecoder.decode(raw, "UTF-8") } catch (e: Exception) { raw }
+    }
+
     private fun parseVless(link: String): ProxyConfig {
-        val uri = URI(link)
-        val uuid = uri.userInfo
-        val host = uri.host
-        val port = if (uri.port == -1) 443 else uri.port
-        val q = parseQuery(uri.rawQuery)
-        val name = uri.fragment?.let { URLDecoder.decode(it, "UTF-8") } ?: "$host:$port"
+        val parts = splitLink(link, "vless://")
+        val uuid = parts.userinfo
+        val host = parts.host
+        val port = parts.port
+        val q = parseQuery(parts.query)
+        val name = decodeNameSafe(parts.fragment, "$host:$port")
 
         val user = JSONObject().apply {
             put("id", uuid)
@@ -142,12 +172,12 @@ object ShareLinkParser {
     }
 
     private fun parseTrojan(link: String): ProxyConfig {
-        val uri = URI(link)
-        val password = uri.userInfo
-        val host = uri.host
-        val port = if (uri.port == -1) 443 else uri.port
-        val q = parseQuery(uri.rawQuery)
-        val name = uri.fragment?.let { URLDecoder.decode(it, "UTF-8") } ?: "$host:$port"
+        val parts = splitLink(link, "trojan://")
+        val password = parts.userinfo
+        val host = parts.host
+        val port = parts.port
+        val q = parseQuery(parts.query)
+        val name = decodeNameSafe(parts.fragment, "$host:$port")
 
         val server = JSONObject().apply {
             put("address", host)
@@ -156,7 +186,7 @@ object ShareLinkParser {
         }
         val settings = JSONObject().put("servers", org.json.JSONArray().put(server))
         val net = q["type"] ?: "tcp"
-        val security = q["security"] ?: "tls" // trojan defaults to tls
+        val security = q["security"]?.ifBlank { "tls" } ?: "tls" // trojan defaults to tls
         val outbound = JSONObject().apply {
             put("protocol", "trojan")
             put("settings", settings)
@@ -175,7 +205,7 @@ object ShareLinkParser {
         val core: String
         if (hashIdx >= 0) {
             core = body.substring(0, hashIdx)
-            name = URLDecoder.decode(body.substring(hashIdx + 1), "UTF-8")
+            name = decodeNameSafe(body.substring(hashIdx + 1), "shadowsocks")
         } else {
             core = body
             name = "shadowsocks"
@@ -221,9 +251,14 @@ object ShareLinkParser {
 
     private fun parseQuery(raw: String?): Map<String, String> {
         if (raw.isNullOrBlank()) return emptyMap()
-        return raw.split("&").mapNotNull {
+        val normalized = raw.replace("&amp;", "&")
+        return normalized.split("&").mapNotNull {
             val parts = it.split("=", limit = 2)
-            if (parts.size == 2) URLDecoder.decode(parts[0], "UTF-8") to URLDecoder.decode(parts[1], "UTF-8") else null
+            if (parts.size == 2) {
+                val key = try { URLDecoder.decode(parts[0], "UTF-8") } catch (e: Exception) { parts[0] }
+                val value = try { URLDecoder.decode(parts[1], "UTF-8") } catch (e: Exception) { parts[1] }
+                key to value
+            } else null
         }.toMap()
     }
 }
