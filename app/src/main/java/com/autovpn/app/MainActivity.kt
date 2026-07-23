@@ -7,6 +7,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -18,6 +23,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.autovpn.app.model.NewsMessage
@@ -363,47 +371,78 @@ class MainActivity : ComponentActivity() {
                     }
                     Spacer(Modifier.height(32.dp))
 
-                    Button(
-                        enabled = !isBusyGlobal,
-                        onClick = {
-                            if (state == ConnState.CONNECTED) {
-                                if (pingedConfigs.isNotEmpty()) {
-                                    val nextIndex = (currentIndex + 1) % pingedConfigs.size
-                                    connectToIndex(nextIndex)
-                                }
-                            } else {
-                                scope.launch {
-                                    state = ConnState.FETCHING
-                                    pingProgress = null
-                                    val enabledUrls = subscriptions.filter { it.enabled }.map { it.url }
-                                    if (enabledUrls.isEmpty()) {
-                                        state = ConnState.ERROR
-                                        return@launch
-                                    }
-                                    val configs = SubscriptionManager.fetchAll(enabledUrls)
-                                    if (configs.isEmpty()) {
-                                        state = ConnState.ERROR
-                                        return@launch
-                                    }
-                                    state = ConnState.PINGING
-                                    val sorted = PingTester.testAll(configs) { progress ->
-                                        scope.launch(Dispatchers.Main) { pingProgress = progress }
-                                    }
-                                    if (sorted.isEmpty()) {
-                                        state = ConnState.ERROR
-                                        return@launch
-                                    }
-                                    pingedConfigs = sorted
-                                    state = ConnState.CONNECTING
-                                    connectToIndex(0)
-                                    state = ConnState.CONNECTED
+                    val showNoDataRing = state == ConnState.CONNECTED && totalDown == 0L
+                    val infiniteTransition = rememberInfiniteTransition(label = "noDataRing")
+                    val ringAngle by infiniteTransition.animateFloat(
+                        initialValue = 0f,
+                        targetValue = 360f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(1200, easing = LinearEasing)
+                        ),
+                        label = "angle"
+                    )
+
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(190.dp)) {
+                        if (showNoDataRing) {
+                            Canvas(modifier = Modifier.matchParentSize()) {
+                                rotate(ringAngle) {
+                                    drawArc(
+                                        color = Color.Red,
+                                        startAngle = 0f,
+                                        sweepAngle = 270f,
+                                        useCenter = false,
+                                        style = Stroke(width = 8.dp.toPx())
+                                    )
                                 }
                             }
-                        },
-                        modifier = Modifier.size(160.dp),
-                        shape = CircleShape
-                    ) {
-                        Text(if (state == ConnState.CONNECTED) "کانفیگ بعدی" else "اتصال")
+                        }
+
+                        Button(
+                            enabled = !isBusyGlobal,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (state == ConnState.CONNECTED)
+                                    Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary
+                            ),
+                            onClick = {
+                                if (state == ConnState.CONNECTED) {
+                                    if (pingedConfigs.isNotEmpty()) {
+                                        val nextIndex = (currentIndex + 1) % pingedConfigs.size
+                                        connectToIndex(nextIndex)
+                                    }
+                                } else {
+                                    scope.launch {
+                                        state = ConnState.FETCHING
+                                        pingProgress = null
+                                        val enabledUrls = subscriptions.filter { it.enabled }.map { it.url }
+                                        if (enabledUrls.isEmpty()) {
+                                            state = ConnState.ERROR
+                                            return@launch
+                                        }
+                                        val configs = SubscriptionManager.fetchAll(enabledUrls)
+                                        if (configs.isEmpty()) {
+                                            state = ConnState.ERROR
+                                            return@launch
+                                        }
+                                        state = ConnState.PINGING
+                                        val sorted = PingTester.testAll(configs) { progress ->
+                                            scope.launch(Dispatchers.Main) { pingProgress = progress }
+                                        }
+                                        if (sorted.isEmpty()) {
+                                            state = ConnState.ERROR
+                                            return@launch
+                                        }
+                                        pingedConfigs = sorted
+                                        state = ConnState.CONNECTING
+                                        connectToIndex(0)
+                                        state = ConnState.CONNECTED
+                                    }
+                                }
+                            },
+                            modifier = Modifier.size(160.dp),
+                            shape = CircleShape
+                        ) {
+                            Text(if (state == ConnState.CONNECTED) "کانفیگ بعدی" else "اتصال")
+                        }
                     }
 
                     Spacer(Modifier.height(24.dp))
