@@ -26,13 +26,11 @@ data class PingProgress(
 object PingTester {
 
     private const val TEST_URL = "https://www.gstatic.com/generate_204"
-    // Pinging is bounded by network I/O (waiting on TLS handshakes), not CPU, so a much
-    // higher parallelism is safe and cuts total wall-clock time a lot when there are
-    // 100+ configs to test.
-    private const val MAX_PARALLEL = 30
-    // Cap on any single config's test, so a handful of slow/hanging servers can't drag
-    // out the whole batch - they just count as failed once this elapses.
-    private const val PER_TEST_TIMEOUT_MS = 6000L
+    // 30-way parallelism turned out to cause resource contention on the phone itself
+    // (too many simultaneous TLS handshakes), which showed up as false failures.
+    // This is a calmer middle ground - still much faster than the original 6.
+    private const val MAX_PARALLEL = 14
+    private const val PER_TEST_TIMEOUT_MS = 9000L
 
     /**
      * Tests every config concurrently and returns the same list, sorted best-ping-first.

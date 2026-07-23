@@ -38,12 +38,14 @@ class MainActivity : ComponentActivity() {
 
     private var pendingBestConfig: ProxyConfig? = null
     private var pendingFragmentEnabled: Boolean = false
+    private var pendingFragmentLength: String = "10-20"
+    private var pendingFragmentInterval: String = "10-20"
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            pendingBestConfig?.let { startTunnelService(it, pendingFragmentEnabled) }
+            pendingBestConfig?.let { startTunnelService(it, pendingFragmentEnabled, pendingFragmentLength, pendingFragmentInterval) }
         }
     }
 
@@ -154,6 +156,8 @@ class MainActivity : ComponentActivity() {
         var currentIndex by remember { mutableStateOf(0) }
         var showAddDialog by remember { mutableStateOf(false) }
         var fragmentEnabled by remember { mutableStateOf(false) }
+        var fragmentLength by remember { mutableStateOf("10-20") }
+        var fragmentInterval by remember { mutableStateOf("10-20") }
         val scope = rememberCoroutineScope()
 
         fun connectToIndex(index: Int) {
@@ -163,11 +167,13 @@ class MainActivity : ComponentActivity() {
             pingMs = cfg.pingMs
             pendingBestConfig = cfg
             pendingFragmentEnabled = fragmentEnabled
+            pendingFragmentLength = fragmentLength
+            pendingFragmentInterval = fragmentInterval
             val vpnIntent = VpnService.prepare(this@MainActivity)
             if (vpnIntent != null) {
                 vpnPermissionLauncher.launch(vpnIntent)
             } else {
-                startTunnelService(cfg, fragmentEnabled)
+                startTunnelService(cfg, fragmentEnabled, fragmentLength, fragmentInterval)
             }
         }
 
@@ -245,6 +251,34 @@ class MainActivity : ComponentActivity() {
                     )
                     Spacer(Modifier.width(8.dp))
                     Text("فرگمنت (ضدفیلترینگ) — اگه پروکسی وصل نمی‌شد، روشن/خاموشش کن")
+                }
+
+                if (fragmentEnabled) {
+                    Row(modifier = Modifier.fillMaxWidth().padding(start = 48.dp, top = 4.dp)) {
+                        OutlinedTextField(
+                            value = fragmentLength,
+                            onValueChange = { fragmentLength = it },
+                            label = { Text("اندازه (length)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        OutlinedTextField(
+                            value = fragmentInterval,
+                            onValueChange = { fragmentInterval = it },
+                            label = { Text("فاصله (interval)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(modifier = Modifier.fillMaxWidth().padding(start = 48.dp)) {
+                        TextButton(
+                            onClick = {
+                                if (state == ConnState.CONNECTED) connectToIndex(currentIndex)
+                            },
+                            enabled = state == ConnState.CONNECTED
+                        ) { Text("اعمالِ مقادیر جدید (وقتی وصلی)") }
+                    }
                 }
 
                 Spacer(Modifier.height(16.dp))
@@ -378,8 +412,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startTunnelService(config: ProxyConfig, fragmentEnabled: Boolean = false) {
-        val fullConfig = XrayConfigBuilder.buildFull(config, fragmentEnabled)
+    private fun startTunnelService(
+        config: ProxyConfig,
+        fragmentEnabled: Boolean = false,
+        fragmentLength: String = "10-20",
+        fragmentInterval: String = "10-20"
+    ) {
+        val fullConfig = XrayConfigBuilder.buildFull(config, fragmentEnabled, fragmentLength, fragmentInterval)
         val intent = Intent(this, VpnTunnelService::class.java).apply {
             action = VpnTunnelService.ACTION_CONNECT
             putExtra(VpnTunnelService.EXTRA_CONFIG_JSON, fullConfig)

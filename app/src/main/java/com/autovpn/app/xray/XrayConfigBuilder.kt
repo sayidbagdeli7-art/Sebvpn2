@@ -13,7 +13,12 @@ import org.json.JSONArray
  */
 object XrayConfigBuilder {
 
-    fun buildFull(proxy: ProxyConfig, fragmentEnabled: Boolean = false): String {
+    fun buildFull(
+        proxy: ProxyConfig,
+        fragmentEnabled: Boolean = false,
+        fragmentLength: String = "10-20",
+        fragmentInterval: String = "10-20"
+    ): String {
         val root = JSONObject()
         root.put("log", JSONObject().put("loglevel", "warning"))
 
@@ -67,8 +72,8 @@ object XrayConfigBuilder {
                 put("settings", JSONObject().apply {
                     put("fragment", JSONObject().apply {
                         put("packets", "tlshello")
-                        put("length", "10-20")
-                        put("interval", "10-20")
+                        put("length", fragmentLength.ifBlank { "10-20" })
+                        put("interval", fragmentInterval.ifBlank { "10-20" })
                     })
                 })
             }
