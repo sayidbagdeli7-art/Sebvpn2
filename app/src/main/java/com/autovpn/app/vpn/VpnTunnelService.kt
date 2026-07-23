@@ -30,9 +30,22 @@ class VpnTunnelService : VpnService() {
         const val EXTRA_SERVER_NAME = "server_name"
         private const val CHANNEL_ID = "vpn_status"
         private const val NOTIF_ID = 1
+        private const val OUTBOUND_TAG = "proxy"
 
         @Volatile var isRunning = false
             private set
+
+        @Volatile private var runningInstance: VpnTunnelService? = null
+
+        /** Bytes moved through the "proxy" outbound since the last call (QueryStats
+         *  resets its counter on every read), as (uplinkBytes, downlinkBytes). Returns
+         *  (0,0) if nothing is running or stats aren't available. */
+        fun queryTraffic(): Pair<Long, Long> {
+            val controller = runningInstance?.coreController ?: return 0L to 0L
+            val up = try { controller.queryStats(OUTBOUND_TAG, "uplink") } catch (e: Exception) { 0L }
+            val down = try { controller.queryStats(OUTBOUND_TAG, "downlink") } catch (e: Exception) { 0L }
+            return up to down
+        }
     }
 
     private var tunFd: ParcelFileDescriptor? = null
@@ -48,6 +61,7 @@ class VpnTunnelService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        runningInstance = this
         when (intent?.action) {
             ACTION_DISCONNECT -> {
                 stopTunnel()
@@ -117,6 +131,7 @@ class VpnTunnelService : VpnService() {
 
     override fun onDestroy() {
         stopTunnel()
+        if (runningInstance === this) runningInstance = null
         super.onDestroy()
     }
 

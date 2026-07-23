@@ -21,6 +21,16 @@ object XrayConfigBuilder {
     ): String {
         val root = JSONObject()
         root.put("log", JSONObject().put("loglevel", "warning"))
+        // Needed for CoreController.queryStats() to return real numbers instead of 0 -
+        // "stats" turns the stats manager on, "policy" tells it to actually count
+        // traffic per outbound.
+        root.put("stats", JSONObject())
+        root.put("policy", JSONObject().apply {
+            put("system", JSONObject().apply {
+                put("statsOutboundUplink", true)
+                put("statsOutboundDownlink", true)
+            })
+        })
 
         // This is the inbound that actually reads IP packets from the TUN file
         // descriptor (the fd is passed separately via CoreController.startLoop / the

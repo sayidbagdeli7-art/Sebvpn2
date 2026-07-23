@@ -30,6 +30,7 @@ import com.autovpn.app.xray.PingProgress
 import com.autovpn.app.xray.PingTester
 import com.autovpn.app.xray.XrayConfigBuilder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 enum class ConnState { DISCONNECTED, FETCHING, PINGING, CONNECTING, CONNECTED, ERROR }
@@ -158,6 +159,9 @@ class MainActivity : ComponentActivity() {
         var fragmentEnabled by remember { mutableStateOf(false) }
         var fragmentLength by remember { mutableStateOf("10-20") }
         var fragmentInterval by remember { mutableStateOf("10-20") }
+        var totalUp by remember { mutableStateOf(0L) }
+        var totalDown by remember { mutableStateOf(0L) }
+        var autoSkipNoTraffic by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
 
         fun connectToIndex(index: Int) {
@@ -190,6 +194,30 @@ class MainActivity : ComponentActivity() {
         }
 
         val isBusyGlobal = state == ConnState.FETCHING || state == ConnState.PINGING || state == ConnState.CONNECTING
+
+        // Polls real up/down traffic every 1.5s while connected. QueryStats resets its
+        // counter on every read, so we accumulate deltas into a running total that
+        // resets whenever we switch to a different config (currentIndex changes).
+        LaunchedEffect(currentIndex, state) {
+            if (state == ConnState.CONNECTED) {
+                totalUp = 0L
+                totalDown = 0L
+                val connectedAt = System.currentTimeMillis()
+                while (state == ConnState.CONNECTED) {
+                    delay(1500)
+                    val (up, down) = VpnTunnelService.queryTraffic()
+                    totalUp += up
+                    totalDown += down
+                    val elapsed = System.currentTimeMillis() - connectedAt
+                    if (autoSkipNoTraffic && elapsed > 10000 && totalDown == 0L) {
+                        if (pingedConfigs.isNotEmpty()) {
+                            connectToIndex((currentIndex + 1) % pingedConfigs.size)
+                        }
+                        break
+                    }
+                }
+            }
+        }
 
         Column(modifier = Modifier.fillMaxSize()) {
 
@@ -305,6 +333,26 @@ class MainActivity : ComponentActivity() {
                     if (pingMs != null) Text("پینگ: ${pingMs} ms")
                     if (state == ConnState.CONNECTED && pingedConfigs.isNotEmpty()) {
                         Text("کانفیگ ${currentIndex + 1} از ${pingedConfigs.size}")
+                        Spacer(Modifier.height(4.dp))
+                        Text("آپلود: ${formatBytes(totalUp)}   دانلود: ${formatBytes(totalDown)}")
+                        if (totalDown == 0L) {
+                            Text(
+                                "هنوز دیتایی رد نشده — ممکنه این کانفیگ فقط پینگ بده و واقعاً وصل نباشه",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = autoSkipNoTraffic,
+                                onCheckedChange = { autoSkipNoTraffic = it }
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                "رد شدن خودکار از کانفیگ‌های بدون دیتا",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
                     }
                     if (state == ConnState.PINGING && pingProgress != null) {
                         val p = pingProgress!!
@@ -410,6 +458,16 @@ class MainActivity : ComponentActivity() {
                 }
             )
         }
+    }
+
+    private fun formatBytes(bytes: Long): String {
+        if (bytes < 1024) return "$bytes B"
+        val kb = bytes / 1024.0
+        if (kb < 1024) return "%.1f KB".format(kb)
+        val mb = kb / 1024.0
+        if (mb < 1024) return "%.2f MB".format(mb)
+        val gb = mb / 1024.0
+        return "%.2f GB".format(gb)
     }
 
     private fun startTunnelService(
