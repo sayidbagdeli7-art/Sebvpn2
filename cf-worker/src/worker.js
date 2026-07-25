@@ -38,12 +38,21 @@ async function getVideoInfo(vid) {
       body: JSON.stringify(body)
     }
   );
-  const data = await res.json();
+  const rawText = await res.text();
+  let data;
+  try {
+    data = JSON.parse(rawText);
+  } catch (e) {
+    throw new Error("non-JSON response, HTTP " + res.status + ": " + rawText.slice(0, 300));
+  }
 
   const status = data.playabilityStatus && data.playabilityStatus.status;
   if (status !== "OK") {
-    const reason = (data.playabilityStatus && data.playabilityStatus.reason) || status || "unknown";
-    throw new Error("playability: " + reason);
+    // DEBUG: include the raw response so we can see exactly what YouTube sent back
+    // instead of just "unknown" - remove this once it's working.
+    throw new Error(
+      "playability not OK. HTTP " + res.status + ". Raw (first 500 chars): " + rawText.slice(0, 500)
+    );
   }
 
   const details = data.videoDetails || {};
