@@ -1,6 +1,7 @@
 package com.autovpn.app
 
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
@@ -32,6 +33,8 @@ import androidx.compose.ui.unit.dp
 import com.autovpn.app.model.NewsMessage
 import com.autovpn.app.model.ProxyConfig
 import com.autovpn.app.news.NewsRepository
+import com.autovpn.app.subscription.LastGoodConfigStore
+import com.autovpn.app.subscription.SplitTunnelStore
 import com.autovpn.app.subscription.SubscriptionManager
 import com.autovpn.app.subscription.SubscriptionStore
 import com.autovpn.app.vpn.VpnTunnelService
@@ -171,6 +174,8 @@ class MainActivity : ComponentActivity() {
         var totalUp by remember { mutableStateOf(0L) }
         var totalDown by remember { mutableStateOf(0L) }
         var autoSkipNoTraffic by remember { mutableStateOf(false) }
+        var showSplitTunnelDialog by remember { mutableStateOf(false) }
+        var splitTunnelSelected by remember { mutableStateOf(SplitTunnelStore.load(this@MainActivity)) }
         val scope = rememberCoroutineScope()
 
         fun connectToIndex(index: Int) {
@@ -207,16 +212,35 @@ class MainActivity : ComponentActivity() {
         // Polls real up/down traffic every 1.5s while connected. QueryStats resets its
         // counter on every read, so we accumulate deltas into a running total that
         // resets whenever we switch to a different config (currentIndex changes).
+        // Also: remembers the first config that actually passes data (for faster
+        // reconnects later), and auto-reconnects if the tunnel dies unexpectedly.
         LaunchedEffect(currentIndex, state) {
             if (state == ConnState.CONNECTED) {
                 totalUp = 0L
                 totalDown = 0L
+                var savedGood = false
                 val connectedAt = System.currentTimeMillis()
                 while (state == ConnState.CONNECTED) {
                     delay(1500)
+
+                    if (!VpnTunnelService.isRunning) {
+                        // The tunnel died on its own (not because the user pressed
+                        // disconnect) - try to bring it back automatically.
+                        connectToIndex(currentIndex)
+                        break
+                    }
+
                     val (up, down) = VpnTunnelService.queryTraffic()
                     totalUp += up
                     totalDown += down
+
+                    if (!savedGood && totalDown > 0L) {
+                        savedGood = true
+                        pingedConfigs.getOrNull(currentIndex)?.let {
+                            LastGoodConfigStore.save(this@MainActivity, it.raw)
+                        }
+                    }
+
                     val elapsed = System.currentTimeMillis() - connectedAt
                     if (autoSkipNoTraffic && elapsed > 10000 && totalDown == 0L) {
                         if (pingedConfigs.isNotEmpty()) {
@@ -316,6 +340,13 @@ class MainActivity : ComponentActivity() {
                             enabled = state == ConnState.CONNECTED
                         ) { Text("اعمالِ مقادیر جدید (وقتی وصلی)") }
                     }
+                }
+
+                TextButton(onClick = { showSplitTunnelDialog = true }, enabled = !isBusyGlobal) {
+                    Text(
+                        if (splitTunnelSelected.isEmpty()) "اپ‌های تونل (الان: همه‌چیز)"
+                        else "اپ‌های تونل (الان: ${splitTunnelSelected.size} اپ انتخابی)"
+                    )
                 }
 
                 Spacer(Modifier.height(16.dp))
@@ -424,6 +455,30 @@ class MainActivity : ComponentActivity() {
                                             state = ConnState.ERROR
                                             return@launch
                                         }
+
+                                        // Quick path: try the last config that actually worked
+                                        // last time, before doing a full ping sweep of everything.
+                                        val lastGoodLink = LastGoodConfigStore.load(this@MainActivity)
+                                        val lastGoodMatch = configs.firstOrNull { it.raw == lastGoodLink }
+                                        if (lastGoodMatch != null) {
+                                            state = ConnState.PINGING
+                                            val quick = PingTester.testAll(listOf(lastGoodMatch))
+                                            if (quick.isNotEmpty()) {
+                                                pingedConfigs = quick
+                                                state = ConnState.CONNECTING
+                                                connectToIndex(0)
+                                                state = ConnState.CONNECTED
+                                                // Keep testing the rest in the background so
+                                                // "next config" has more options shortly after.
+                                                scope.launch {
+                                                    val rest = configs.filter { it.raw != lastGoodLink }
+                                                    val restSorted = PingTester.testAll(rest)
+                                                    pingedConfigs = (quick + restSorted).distinctBy { it.raw }
+                                                }
+                                                return@launch
+                                            }
+                                        }
+
                                         state = ConnState.PINGING
                                         val sorted = PingTester.testAll(configs) { progress ->
                                             scope.launch(Dispatchers.Main) { pingProgress = progress }
@@ -495,6 +550,63 @@ class MainActivity : ComponentActivity() {
                 },
                 dismissButton = {
                     TextButton(onClick = { showAddDialog = false }) { Text("انصراف") }
+                }
+            )
+        }
+
+        if (showSplitTunnelDialog) {
+            var tempSelected by remember { mutableStateOf(splitTunnelSelected) }
+            val installedApps = remember {
+                val pm = packageManager
+                pm.getInstalledApplications(0)
+                    .filter { pm.getLaunchIntentForPackage(it.packageName) != null }
+                    .map { it.packageName to pm.getApplicationLabel(it).toString() }
+                    .sortedBy { it.second.lowercase() }
+            }
+
+            AlertDialog(
+                onDismissRequest = { showSplitTunnelDialog = false },
+                title = { Text("اپ‌های داخل تونل") },
+                text = {
+                    Column {
+                        Text(
+                            "اگه هیچی تیک نخوره، همه‌چیز از تونل رد می‌شه (پیش‌فرض). اگه چندتا اپ رو تیک بزنی، فقط همون‌ها از تونل رد می‌شن، بقیه مستقیم می‌رن.",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        LazyColumn(modifier = Modifier.heightIn(max = 350.dp)) {
+                            items(installedApps) { (pkg, label) ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Checkbox(
+                                        checked = tempSelected.contains(pkg),
+                                        onCheckedChange = { checked ->
+                                            tempSelected = if (checked) tempSelected + pkg else tempSelected - pkg
+                                        }
+                                    )
+                                    Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        splitTunnelSelected = tempSelected
+                        SplitTunnelStore.save(this@MainActivity, tempSelected)
+                        showSplitTunnelDialog = false
+                        if (state == ConnState.CONNECTED) {
+                            // The TUN interface only picks up allow/deny lists when it's
+                            // first created, so a running tunnel needs a fresh disconnect
+                            // before this setting actually takes effect.
+                            disconnect()
+                        }
+                    }) { Text("ذخیره") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showSplitTunnelDialog = false }) { Text("انصراف") }
                 }
             )
         }

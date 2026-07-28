@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import com.autovpn.app.MainActivity
+import com.autovpn.app.subscription.SplitTunnelStore
 import libv2ray.CoreController
 import libv2ray.Libv2ray
 
@@ -95,11 +96,21 @@ class VpnTunnelService : VpnService() {
                 .addDnsServer("8.8.8.8")
                 .setMtu(1500)
 
-            // Exclude our own app from the tunnel so Xray's own outbound connections
-            // go out directly instead of looping back into the VPN interface.
-            try {
-                builder.addDisallowedApplication(packageName)
-            } catch (e: Exception) { /* ignore */ }
+            // Split tunneling: if the user picked specific apps, only those apps'
+            // traffic goes through the tunnel (allow-list). Otherwise (default),
+            // everything goes through except our own app (deny-list of just us),
+            // which is what avoids Xray's own outbound connections looping back in.
+            val selectedApps = SplitTunnelStore.load(applicationContext)
+            if (selectedApps.isNotEmpty()) {
+                for (pkg in selectedApps) {
+                    if (pkg == packageName) continue // never tunnel ourselves
+                    try { builder.addAllowedApplication(pkg) } catch (e: Exception) { /* app may be uninstalled */ }
+                }
+            } else {
+                try {
+                    builder.addDisallowedApplication(packageName)
+                } catch (e: Exception) { /* ignore */ }
+            }
 
             tunFd = builder.establish()
         }
