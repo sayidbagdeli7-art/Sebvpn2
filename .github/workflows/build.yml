@@ -17,8 +17,8 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Accept Android SDK licenses (SDK is preinstalled on this runner)
+        run: yes | sdkmanager --licenses > /dev/null || true
 
       - name: Download libv2ray.aar (Xray core) from latest AndroidLibXrayLite release
         run: |
