@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.dp
 import com.autovpn.app.model.NewsMessage
 import com.autovpn.app.model.ProxyConfig
 import com.autovpn.app.news.NewsRepository
-import com.autovpn.app.subscription.LastGoodConfigStore
+import com.autovpn.app.subscription.GoodConfigsStore
 import com.autovpn.app.subscription.SplitTunnelStore
 import com.autovpn.app.subscription.SubscriptionManager
 import com.autovpn.app.subscription.SubscriptionStore
@@ -260,7 +260,7 @@ class MainActivity : ComponentActivity() {
                     if (!savedGood && totalDown > 0L) {
                         savedGood = true
                         pingedConfigs.getOrNull(currentIndex)?.let {
-                            LastGoodConfigStore.save(this@MainActivity, it.raw)
+                            GoodConfigsStore.markGood(this@MainActivity, it.raw)
                         }
                     }
 
@@ -486,13 +486,16 @@ class MainActivity : ComponentActivity() {
                                             return@launch
                                         }
 
-                                        // Quick path: try the last config that actually worked
-                                        // last time, before doing a full ping sweep of everything.
-                                        val lastGoodLink = LastGoodConfigStore.load(this@MainActivity)
-                                        val lastGoodMatch = configs.firstOrNull { it.raw == lastGoodLink }
-                                        if (lastGoodMatch != null) {
+                                        // Quick path: try every config that has actually worked
+                                        // before, in one small batch, before doing a full ping
+                                        // sweep of everything.
+                                        val goodLinks = GoodConfigsStore.load(this@MainActivity)
+                                        val goodMatches = goodLinks.mapNotNull { link -> configs.firstOrNull { it.raw == link } }
+                                        if (goodMatches.isNotEmpty()) {
                                             state = ConnState.PINGING
-                                            val quick = PingTester.testAll(listOf(lastGoodMatch))
+                                            val quick = PingTester.testAll(goodMatches) { progress ->
+                                                scope.launch(Dispatchers.Main) { pingProgress = progress }
+                                            }
                                             if (quick.isNotEmpty()) {
                                                 pingedConfigs = quick
                                                 state = ConnState.CONNECTING
@@ -501,7 +504,8 @@ class MainActivity : ComponentActivity() {
                                                 // Keep testing the rest in the background so
                                                 // "next config" has more options shortly after.
                                                 scope.launch {
-                                                    val rest = configs.filter { it.raw != lastGoodLink }
+                                                    val goodSet = goodMatches.map { it.raw }.toSet()
+                                                    val rest = configs.filter { it.raw !in goodSet }
                                                     val restSorted = PingTester.testAll(rest)
                                                     pingedConfigs = (quick + restSorted).distinctBy { it.raw }
                                                 }
