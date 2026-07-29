@@ -176,6 +176,7 @@ class MainActivity : ComponentActivity() {
         var autoSkipNoTraffic by remember { mutableStateOf(false) }
         var showSplitTunnelDialog by remember { mutableStateOf(false) }
         var splitTunnelSelected by remember { mutableStateOf(SplitTunnelStore.load(this@MainActivity)) }
+        var refreshing by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
 
         fun connectToIndex(index: Int) {
@@ -207,7 +208,29 @@ class MainActivity : ComponentActivity() {
             currentIndex = 0
         }
 
-        val isBusyGlobal = state == ConnState.FETCHING || state == ConnState.PINGING || state == ConnState.CONNECTING
+        suspend fun fullRefresh() {
+            if (refreshing) return
+            refreshing = true
+            pingProgress = null
+            try {
+                val enabledUrls = subscriptions.filter { it.enabled }.map { it.url }
+                if (enabledUrls.isEmpty()) return
+                val configs = SubscriptionManager.fetchAll(enabledUrls)
+                if (configs.isEmpty()) return
+                val currentRaw = pingedConfigs.getOrNull(currentIndex)?.raw
+                val sorted = PingTester.testAll(configs) { progress -> pingProgress = progress }
+                if (sorted.isNotEmpty()) {
+                    pingedConfigs = sorted
+                    val newIndex = sorted.indexOfFirst { it.raw == currentRaw }
+                    if (newIndex >= 0) currentIndex = newIndex
+                }
+            } finally {
+                refreshing = false
+                pingProgress = null
+            }
+        }
+
+        val isBusyGlobal = state == ConnState.FETCHING || state == ConnState.PINGING || state == ConnState.CONNECTING || refreshing
 
         // Polls real up/down traffic every 1.5s while connected. QueryStats resets its
         // counter on every read, so we accumulate deltas into a running total that
@@ -349,6 +372,13 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
+                TextButton(
+                    onClick = { scope.launch { fullRefresh() } },
+                    enabled = !isBusyGlobal
+                ) {
+                    Text(if (refreshing) "در حال بررسیِ کاملِ کانفیگ‌ها..." else "بررسیِ کاملِ همه‌ی کانفیگ‌ها (بدونِ قطع‌شدن)")
+                }
+
                 Spacer(Modifier.height(16.dp))
                 HorizontalDivider()
                 Spacer(Modifier.height(16.dp))
@@ -394,7 +424,7 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
-                    if (state == ConnState.PINGING && pingProgress != null) {
+                    if ((state == ConnState.PINGING || refreshing) && pingProgress != null) {
                         val p = pingProgress!!
                         Spacer(Modifier.height(4.dp))
                         Text("کل کانفیگ‌ها: ${p.total}")
