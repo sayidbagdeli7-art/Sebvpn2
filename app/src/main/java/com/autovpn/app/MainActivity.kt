@@ -33,7 +33,6 @@ import androidx.compose.ui.unit.dp
 import com.autovpn.app.model.NewsMessage
 import com.autovpn.app.model.ProxyConfig
 import com.autovpn.app.news.NewsRepository
-import com.autovpn.app.subscription.GoodConfigsStore
 import com.autovpn.app.subscription.SplitTunnelStore
 import com.autovpn.app.subscription.SubscriptionManager
 import com.autovpn.app.subscription.SubscriptionStore
@@ -235,13 +234,11 @@ class MainActivity : ComponentActivity() {
         // Polls real up/down traffic every 1.5s while connected. QueryStats resets its
         // counter on every read, so we accumulate deltas into a running total that
         // resets whenever we switch to a different config (currentIndex changes).
-        // Also: remembers the first config that actually passes data (for faster
-        // reconnects later), and auto-reconnects if the tunnel dies unexpectedly.
+        // Also auto-reconnects if the tunnel dies unexpectedly.
         LaunchedEffect(currentIndex, state) {
             if (state == ConnState.CONNECTED) {
                 totalUp = 0L
                 totalDown = 0L
-                var savedGood = false
                 val connectedAt = System.currentTimeMillis()
                 while (state == ConnState.CONNECTED) {
                     delay(1500)
@@ -256,13 +253,6 @@ class MainActivity : ComponentActivity() {
                     val (up, down) = VpnTunnelService.queryTraffic()
                     totalUp += up
                     totalDown += down
-
-                    if (!savedGood && totalDown > 0L) {
-                        savedGood = true
-                        pingedConfigs.getOrNull(currentIndex)?.let {
-                            GoodConfigsStore.markGood(this@MainActivity, it.raw)
-                        }
-                    }
 
                     val elapsed = System.currentTimeMillis() - connectedAt
                     if (autoSkipNoTraffic && elapsed > 10000 && totalDown == 0L) {
@@ -484,33 +474,6 @@ class MainActivity : ComponentActivity() {
                                         if (configs.isEmpty()) {
                                             state = ConnState.ERROR
                                             return@launch
-                                        }
-
-                                        // Quick path: try every config that has actually worked
-                                        // before, in one small batch, before doing a full ping
-                                        // sweep of everything.
-                                        val goodLinks = GoodConfigsStore.load(this@MainActivity)
-                                        val goodMatches = goodLinks.mapNotNull { link -> configs.firstOrNull { it.raw == link } }
-                                        if (goodMatches.isNotEmpty()) {
-                                            state = ConnState.PINGING
-                                            val quick = PingTester.testAll(goodMatches) { progress ->
-                                                scope.launch(Dispatchers.Main) { pingProgress = progress }
-                                            }
-                                            if (quick.isNotEmpty()) {
-                                                pingedConfigs = quick
-                                                state = ConnState.CONNECTING
-                                                connectToIndex(0)
-                                                state = ConnState.CONNECTED
-                                                // Keep testing the rest in the background so
-                                                // "next config" has more options shortly after.
-                                                scope.launch {
-                                                    val goodSet = goodMatches.map { it.raw }.toSet()
-                                                    val rest = configs.filter { it.raw !in goodSet }
-                                                    val restSorted = PingTester.testAll(rest)
-                                                    pingedConfigs = (quick + restSorted).distinctBy { it.raw }
-                                                }
-                                                return@launch
-                                            }
                                         }
 
                                         state = ConnState.PINGING
