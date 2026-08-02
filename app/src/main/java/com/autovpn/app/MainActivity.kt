@@ -41,6 +41,7 @@ import com.autovpn.app.xray.PingProgress
 import com.autovpn.app.xray.PingTester
 import com.autovpn.app.xray.XrayConfigBuilder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -176,6 +177,7 @@ class MainActivity : ComponentActivity() {
         var showSplitTunnelDialog by remember { mutableStateOf(false) }
         var splitTunnelSelected by remember { mutableStateOf(SplitTunnelStore.load(this@MainActivity)) }
         var refreshing by remember { mutableStateOf(false) }
+        var connectJob by remember { mutableStateOf<Job?>(null) }
         val scope = rememberCoroutineScope()
 
         fun connectToIndex(index: Int) {
@@ -196,6 +198,11 @@ class MainActivity : ComponentActivity() {
         }
 
         fun disconnect() {
+            // Stop whatever fetch/ping work is still running in the background - without
+            // this, pressing disconnect mid-search didn't actually stop the search, it
+            // just kept going and could even reconnect once it finished.
+            connectJob?.cancel()
+            connectJob = null
             startService(Intent(this@MainActivity, VpnTunnelService::class.java).apply {
                 action = VpnTunnelService.ACTION_DISCONNECT
             })
@@ -363,7 +370,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 TextButton(
-                    onClick = { scope.launch { fullRefresh() } },
+                    onClick = { connectJob = scope.launch { fullRefresh() } },
                     enabled = !isBusyGlobal
                 ) {
                     Text(if (refreshing) "در حال بررسیِ کاملِ کانفیگ‌ها..." else "بررسیِ کاملِ همه‌ی کانفیگ‌ها (بدونِ قطع‌شدن)")
@@ -462,7 +469,7 @@ class MainActivity : ComponentActivity() {
                                         connectToIndex(nextIndex)
                                     }
                                 } else {
-                                    scope.launch {
+                                    connectJob = scope.launch {
                                         state = ConnState.FETCHING
                                         pingProgress = null
                                         val enabledUrls = subscriptions.filter { it.enabled }.map { it.url }
