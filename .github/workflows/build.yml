@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -34,6 +37,8 @@ jobs:
           gradle-version: 8.7
 
       - name: Build debug APK
+        env:
+          GIT_SHA: ${{ github.sha }}
         run: gradle assembleDebug --no-daemon
 
       - name: Upload APK artifact
@@ -41,3 +46,22 @@ jobs:
         with:
           name: AutoVPN-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+
+      - name: Publish "latest" release for in-app auto-update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "$SHORT_SHA" > version.txt
+          cp app/build/outputs/apk/debug/app-debug.apk AutoVPN.apk
+
+          # Remove any previous "latest" release + tag so we always end up with
+          # exactly one release that the app's fixed download URL points to.
+          gh release delete latest --yes --cleanup-tag || true
+
+          gh release create latest \
+            AutoVPN.apk version.txt \
+            --title "Latest build ($SHORT_SHA)" \
+            --notes "Automatically built from commit $SHORT_SHA" \
+            --target "${{ github.sha }}"
