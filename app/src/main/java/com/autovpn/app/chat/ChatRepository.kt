@@ -20,7 +20,10 @@ object ChatRepository {
 
     // >>> Change this if you fork the repo under a different owner/name <<<
     private const val REPO = "sayidbagdeli7-art/Sebvpn2"
-    private const val BRANCH = "main"
+    // The chat lives on its OWN branch (not main) so a scheduled cleanup job can
+    // periodically rewrite this branch's history to actually erase old messages,
+    // without touching the app's real code history on main.
+    private const val BRANCH = "chat-data"
     private const val FILE_PATH = "chat/messages.json"
     private const val MAX_MESSAGES = 200
 
