@@ -30,12 +30,18 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.autovpn.app.chat.ChatCrypto
+import com.autovpn.app.chat.ChatRepository
+import com.autovpn.app.model.ChatMessage
 import com.autovpn.app.model.NewsMessage
 import com.autovpn.app.model.ProxyConfig
 import com.autovpn.app.news.NewsRepository
+import com.autovpn.app.subscription.ChatPasswordStore
+import com.autovpn.app.subscription.GitHubTokenStore
 import com.autovpn.app.subscription.SplitTunnelStore
 import com.autovpn.app.subscription.SubscriptionManager
 import com.autovpn.app.subscription.SubscriptionStore
+import com.autovpn.app.update.UpdateChecker
 import com.autovpn.app.vpn.VpnTunnelService
 import com.autovpn.app.xray.PingProgress
 import com.autovpn.app.xray.PingTester
@@ -44,6 +50,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.core.content.FileProvider
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.io.File
 
 enum class ConnState { DISCONNECTED, FETCHING, PINGING, CONNECTING, CONNECTED, ERROR }
 
@@ -70,6 +81,46 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun AppRoot() {
         var selectedTab by remember { mutableStateOf(0) }
+        var showUpdateDialog by remember { mutableStateOf(false) }
+        var downloadingUpdate by remember { mutableStateOf(false) }
+        val scope = rememberCoroutineScope()
+
+        LaunchedEffect(Unit) {
+            if (UpdateChecker.isUpdateAvailable()) {
+                showUpdateDialog = true
+            }
+        }
+
+        fun downloadAndInstallUpdate() {
+            scope.launch {
+                downloadingUpdate = true
+                try {
+                    val apkFile = withContext(Dispatchers.IO) {
+                        val dir = File(cacheDir, "updates").apply { mkdirs() }
+                        val file = File(dir, "AutoVPN.apk")
+                        val client = OkHttpClient()
+                        val req = Request.Builder().url(UpdateChecker.APK_URL).build()
+                        client.newCall(req).execute().use { resp ->
+                            if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}")
+                            file.outputStream().use { out -> resp.body?.byteStream()?.copyTo(out) }
+                        }
+                        file
+                    }
+                    val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", apkFile)
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, "application/vnd.android.package-archive")
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    }
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    // Download or install failed - nothing to auto-recover here, the
+                    // user can just try "بروزرسانی" again later from GitHub Actions.
+                } finally {
+                    downloadingUpdate = false
+                    showUpdateDialog = false
+                }
+            }
+        }
 
         MaterialTheme {
             Surface(modifier = Modifier.fillMaxSize()) {
@@ -85,10 +136,43 @@ class MainActivity : ComponentActivity() {
                             onClick = { selectedTab = 1 },
                             text = { Text("اخبار") }
                         )
+                        Tab(
+                            selected = selectedTab == 2,
+                            onClick = { selectedTab = 2 },
+                            text = { Text("چت") }
+                        )
                     }
                     Box(modifier = Modifier.weight(1f)) {
-                        if (selectedTab == 0) VpnTab() else NewsTab()
+                        when (selectedTab) {
+                            0 -> VpnTab()
+                            1 -> NewsTab()
+                            else -> ChatTab()
+                        }
                     }
+                }
+
+                if (showUpdateDialog) {
+                    AlertDialog(
+                        onDismissRequest = { if (!downloadingUpdate) showUpdateDialog = false },
+                        title = { Text("بروزرسانی جدید") },
+                        text = {
+                            Text(
+                                if (downloadingUpdate) "در حال دانلود و آماده‌سازیِ نصب..."
+                                else "نسخه‌ی جدیدتری از اپ روی گیت‌هاب موجوده. می‌خوای دانلود و نصبش کنی؟"
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { downloadAndInstallUpdate() }, enabled = !downloadingUpdate) {
+                                Text(if (downloadingUpdate) "..." else "دانلود و نصب")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = { showUpdateDialog = false },
+                                enabled = !downloadingUpdate
+                            ) { Text("بعداً") }
+                        }
+                    )
                 }
             }
         }
@@ -155,6 +239,165 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    @Composable
+    fun ChatTab() {
+        var password by remember { mutableStateOf(ChatPasswordStore.load(this@MainActivity)) }
+        var githubToken by remember { mutableStateOf(GitHubTokenStore.load(this@MainActivity)) }
+        var showPasswordDialog by remember { mutableStateOf(password.isBlank()) }
+        var showTokenDialog by remember { mutableStateOf(false) }
+        var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
+        var loading by remember { mutableStateOf(false) }
+        var sending by remember { mutableStateOf(false) }
+        var draft by remember { mutableStateOf("") }
+        var statusMsg by remember { mutableStateOf<String?>(null) }
+        val scope = rememberCoroutineScope()
+
+        fun refresh() {
+            scope.launch {
+                loading = true
+                messages = ChatRepository.fetchMessages()
+                loading = false
+            }
+        }
+
+        LaunchedEffect(Unit) { refresh() }
+
+        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text("چتِ رمزنگاری‌شده", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                TextButton(onClick = { refresh() }, enabled = !loading) {
+                    Text(if (loading) "..." else "بروزرسانی")
+                }
+            }
+            Row {
+                TextButton(onClick = { showPasswordDialog = true }) { Text("پسورد") }
+                TextButton(onClick = { showTokenDialog = true }) {
+                    Text(if (githubToken.isBlank()) "تنظیمِ توکنِ گیت‌هاب" else "توکن تنظیم شده ✓")
+                }
+            }
+            if (statusMsg != null) {
+                Text(statusMsg!!, style = MaterialTheme.typography.labelSmall)
+            }
+            Spacer(Modifier.height(8.dp))
+
+            LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                items(messages) { msg ->
+                    val plain = if (password.isNotBlank()) ChatCrypto.decrypt(msg.ciphertext, password) else null
+                    if (plain != null) {
+                        Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(plain)
+                            }
+                        }
+                    }
+                    // Messages that fail to decrypt (wrong password, or not one of
+                    // ours) are just skipped instead of showing a confusing "🔒".
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("پیام...") },
+                    singleLine = true
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    enabled = !sending && draft.isNotBlank() && password.isNotBlank(),
+                    onClick = {
+                        val text = draft
+                        scope.launch {
+                            sending = true
+                            statusMsg = "در حال ارسال..."
+                            val ciphertext = ChatCrypto.encrypt(text, password)
+                            when (val result = ChatRepository.sendMessage(githubToken, ciphertext)) {
+                                is ChatRepository.SendResult.Success -> {
+                                    draft = ""
+                                    statusMsg = null
+                                    refresh()
+                                }
+                                is ChatRepository.SendResult.Error -> {
+                                    statusMsg = "ارسال ناموفق: ${result.message}"
+                                }
+                            }
+                            sending = false
+                        }
+                    }
+                ) { Text("ارسال") }
+            }
+        }
+
+        if (showPasswordDialog) {
+            var input by remember { mutableStateOf(password) }
+            AlertDialog(
+                onDismissRequest = { showPasswordDialog = false },
+                title = { Text("پسوردِ مشترکِ چت") },
+                text = {
+                    Column {
+                        Text(
+                            "این پسورد فقط روی همین گوشی ذخیره می‌شه (نه گیت‌هاب، نه هیچ‌جای دیگه). طرفِ مقابل هم باید دقیقاً همین پسورد رو توی اپِ خودش وارد کنه.",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = input,
+                            onValueChange = { input = it },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        password = input
+                        ChatPasswordStore.save(this@MainActivity, password)
+                        showPasswordDialog = false
+                    }) { Text("ذخیره") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showPasswordDialog = false }) { Text("انصراف") }
+                }
+            )
+        }
+
+        if (showTokenDialog) {
+            var input by remember { mutableStateOf(githubToken) }
+            AlertDialog(
+                onDismissRequest = { showTokenDialog = false },
+                title = { Text("توکنِ گیت‌هاب") },
+                text = {
+                    Column {
+                        Text(
+                            "برای فرستادنِ پیام لازمه (فقط برای خوندن نه). این توکن فقط روی همین گوشی ذخیره می‌شه.",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = input,
+                            onValueChange = { input = it },
+                            placeholder = { Text("ghp_...") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        githubToken = input.trim()
+                        GitHubTokenStore.save(this@MainActivity, githubToken)
+                        showTokenDialog = false
+                    }) { Text("ذخیره") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showTokenDialog = false }) { Text("انصراف") }
+                }
+            )
         }
     }
 
