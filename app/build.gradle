@@ -13,9 +13,29 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
+        // Baked in at build time by the GitHub Actions workflow (GIT_SHA env var) so
+        // the app can tell whether a newer build exists on GitHub. Local builds that
+        // don't set this env var just get "dev", which never matches a release.
+        buildConfigField "String", "GIT_SHA", "\"${System.getenv('GIT_SHA') ?: 'dev'}\""
+    }
+
+    // Fixed debug-signing key committed to the repo (app/../debug.keystore) so every
+    // build - whether from GitHub Actions or a local machine - is signed identically.
+    // Without this, each CI run got a random new key and Android refused to install
+    // the "update" over the previous copy (had to uninstall first every time).
+    signingConfigs {
+        debug {
+            storeFile file("${rootProject.projectDir}/debug.keystore")
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
@@ -31,6 +51,7 @@ android {
     }
     buildFeatures {
         compose true
+        buildConfig true
     }
     composeOptions {
         kotlinCompilerExtensionVersion '1.5.14'
