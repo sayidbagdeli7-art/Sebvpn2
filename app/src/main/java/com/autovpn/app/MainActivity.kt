@@ -316,11 +316,16 @@ class MainActivity : ComponentActivity() {
                             sending = true
                             statusMsg = "در حال ارسال..."
                             val ciphertext = ChatCrypto.encrypt(text, password)
+                            val sentAt = System.currentTimeMillis()
                             when (val result = ChatRepository.sendMessage(githubToken, ciphertext)) {
                                 is ChatRepository.SendResult.Success -> {
+                                    // Add it straight to the visible list instead of only
+                                    // relying on a re-fetch - jsDelivr's cache can take a
+                                    // few seconds to actually update even after a purge,
+                                    // so a fetch right after sending can still miss it.
+                                    messages = messages + ChatMessage(ciphertext, sentAt)
                                     draft = ""
                                     statusMsg = null
-                                    refresh()
                                 }
                                 is ChatRepository.SendResult.Error -> {
                                     statusMsg = "ارسال ناموفق: ${result.message}"
