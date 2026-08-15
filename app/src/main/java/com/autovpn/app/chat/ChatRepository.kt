@@ -122,11 +122,28 @@ object ChatRepository {
                 .build()
 
             client.newCall(putReq).execute().use { resp ->
-                if (resp.isSuccessful) SendResult.Success
-                else SendResult.Error("ثبتِ پیام ناموفق بود (${resp.code})")
+                if (resp.isSuccessful) {
+                    purgeJsDelivrCache()
+                    SendResult.Success
+                } else {
+                    SendResult.Error("ثبتِ پیام ناموفق بود (${resp.code})")
+                }
             }
         } catch (e: Exception) {
             SendResult.Error(e.message ?: "خطای ناشناخته")
+        }
+    }
+
+    private fun purgeJsDelivrCache() {
+        // jsDelivr caches aggressively, so without this a message you just sent can
+        // stay invisible (to yourself and the other person) for a long time even
+        // though it's really on GitHub already.
+        try {
+            val purgeUrl = "https://purge.jsdelivr.net/gh/$REPO@$BRANCH/$FILE_PATH"
+            val req = Request.Builder().url(purgeUrl).build()
+            client.newCall(req).execute().close()
+        } catch (e: Exception) {
+            // best-effort only
         }
     }
 }
