@@ -255,15 +255,31 @@ class MainActivity : ComponentActivity() {
         var statusMsg by remember { mutableStateOf<String?>(null) }
         val scope = rememberCoroutineScope()
 
-        fun refresh() {
+        fun refresh(showLoading: Boolean = true) {
             scope.launch {
-                loading = true
-                messages = ChatRepository.fetchMessages()
-                loading = false
+                if (showLoading) loading = true
+                val fetched = ChatRepository.fetchMessages()
+                // Merge instead of overwrite, so a just-sent message we're already
+                // showing locally doesn't briefly disappear if the fetch is still
+                // catching up to what we sent.
+                messages = (messages + fetched)
+                    .distinctBy { it.ciphertext }
+                    .sortedBy { it.timestamp }
+                if (showLoading) loading = false
             }
         }
 
-        LaunchedEffect(Unit) { refresh() }
+        // Auto-refresh in the background every 7s while this tab is open, so the
+        // other person's messages show up without needing to tap "بروزرسانی"
+        // manually each time. Only reads from jsDelivr (no token used), so this
+        // doesn't burn through the GitHub token's rate limit.
+        LaunchedEffect(Unit) {
+            refresh()
+            while (true) {
+                delay(7000)
+                refresh(showLoading = false)
+            }
+        }
 
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
