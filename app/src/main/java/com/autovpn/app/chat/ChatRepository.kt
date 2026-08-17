@@ -39,11 +39,27 @@ object ChatRepository {
 
     suspend fun fetchMessages(): List<ChatMessage> = withContext(Dispatchers.IO) {
         val jsDelivrUrl = "https://cdn.jsdelivr.net/gh/$REPO@$BRANCH/$FILE_PATH"
-        val body = tryFetch(jsDelivrUrl) ?: tryFetch(
-            "https://raw.githubusercontent.com/$REPO/$BRANCH/$FILE_PATH"
-        ) ?: return@withContext emptyList()
+        // Also add a cache-busting query param since some CDN edge nodes key their
+        // cache on the exact URL - this alone isn't guaranteed to bypass jsDelivr's
+        // cache, so we still fetch raw GitHub in parallel below as the real fix.
+        val rawUrl = "https://raw.githubusercontent.com/$REPO/$BRANCH/$FILE_PATH?t=${System.currentTimeMillis()}"
 
-        try {
+        // jsDelivr's purge-on-send is best-effort and can occasionally lag behind
+        // (rate limits, propagation delay) - rather than only falling back to raw
+        // GitHub when jsDelivr fails outright, fetch both every time and merge, so
+        // whichever one happens to be fresher wins.
+        val jsDelivrBody = tryFetch(jsDelivrUrl)
+        val rawBody = tryFetch(rawUrl)
+
+        val fromJsDelivr = parseMessages(jsDelivrBody)
+        val fromRaw = parseMessages(rawBody)
+
+        (fromJsDelivr + fromRaw).distinctBy { it.ciphertext }.sortedBy { it.timestamp }
+    }
+
+    private fun parseMessages(body: String?): List<ChatMessage> {
+        if (body.isNullOrBlank()) return emptyList()
+        return try {
             val arr = JSONArray(body)
             (0 until arr.length()).map { i ->
                 val o = arr.getJSONObject(i)
@@ -55,7 +71,7 @@ object ChatRepository {
     }
 
     private fun tryFetch(url: String): String? = try {
-        val req = Request.Builder().url(url).build()
+        val req = Request.Builder().url(url).header("Cache-Control", "no-cache").build()
         client.newCall(req).execute().use { resp ->
             if (resp.isSuccessful) resp.body?.string() else null
         }
