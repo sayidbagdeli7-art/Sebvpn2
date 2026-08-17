@@ -119,9 +119,12 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        var updateError by remember { mutableStateOf<String?>(null) }
+
         fun downloadAndInstallUpdate() {
             scope.launch {
                 downloadingUpdate = true
+                updateError = null
                 try {
                     val apkFile = withContext(Dispatchers.IO) {
                         val dir = File(cacheDir, "updates").apply { mkdirs() }
@@ -129,8 +132,9 @@ class MainActivity : ComponentActivity() {
                         val client = OkHttpClient()
                         val req = Request.Builder().url(UpdateChecker.APK_URL).build()
                         client.newCall(req).execute().use { resp ->
-                            if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}")
-                            file.outputStream().use { out -> resp.body?.byteStream()?.copyTo(out) }
+                            if (!resp.isSuccessful) throw Exception("دانلود ناموفق (HTTP ${resp.code})")
+                            val body = resp.body ?: throw Exception("پاسخ خالی بود")
+                            file.outputStream().use { out -> body.byteStream().copyTo(out) }
                         }
                         file
                     }
@@ -140,12 +144,11 @@ class MainActivity : ComponentActivity() {
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
                     }
                     startActivity(intent)
+                    showUpdateDialog = false
                 } catch (e: Exception) {
-                    // Download or install failed - nothing to auto-recover here, the
-                    // user can just try "بروزرسانی" again later from GitHub Actions.
+                    updateError = e.message ?: "خطای ناشناخته"
                 } finally {
                     downloadingUpdate = false
-                    showUpdateDialog = false
                 }
             }
         }
@@ -184,10 +187,20 @@ class MainActivity : ComponentActivity() {
                         onDismissRequest = { if (!downloadingUpdate) showUpdateDialog = false },
                         title = { Text("بروزرسانی جدید") },
                         text = {
-                            Text(
-                                if (downloadingUpdate) "در حال دانلود و آماده‌سازیِ نصب..."
-                                else "نسخه‌ی جدیدتری از اپ روی گیت‌هاب موجوده. می‌خوای دانلود و نصبش کنی؟"
-                            )
+                            Column {
+                                Text(
+                                    if (downloadingUpdate) "در حال دانلود و آماده‌سازیِ نصب..."
+                                    else "نسخه‌ی جدیدتری از اپ روی گیت‌هاب موجوده. می‌خوای دانلود و نصبش کنی؟"
+                                )
+                                if (updateError != null) {
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        "خطا: $updateError",
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
+                            }
                         },
                         confirmButton = {
                             TextButton(onClick = { downloadAndInstallUpdate() }, enabled = !downloadingUpdate) {

@@ -52,8 +52,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          echo "$SHORT_SHA" > version.txt
+          FULL_SHA="${{ github.sha }}"
+          SHORT_SHA=$(echo "$FULL_SHA" | cut -c1-7)
+          # This must exactly match BuildConfig.GIT_SHA (which is the FULL sha) or
+          # the in-app update check will never see them as equal and will always
+          # think an update is available, even right after installing the latest one.
+          echo "$FULL_SHA" > version.txt
           cp app/build/outputs/apk/debug/app-debug.apk AutoVPN.apk
 
           # Remove any previous "latest" release + tag so we always end up with
@@ -64,4 +68,4 @@ jobs:
             AutoVPN.apk version.txt \
             --title "Latest build ($SHORT_SHA)" \
             --notes "Automatically built from commit $SHORT_SHA" \
-            --target "${{ github.sha }}"
+            --target "$FULL_SHA"
