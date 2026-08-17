@@ -134,6 +134,66 @@ object ChatRepository {
         }
     }
 
+    suspend fun deleteMessage(token: String, ciphertext: String): SendResult = withContext(Dispatchers.IO) {
+        if (token.isBlank()) return@withContext SendResult.Error("توکن گیت‌هاب وارد نشده")
+
+        val apiUrl = "https://api.github.com/repos/$REPO/contents/$FILE_PATH"
+        try {
+            val getReq = Request.Builder()
+                .url("$apiUrl?ref=$BRANCH")
+                .addHeader("Authorization", "Bearer $token")
+                .addHeader("Accept", "application/vnd.github+json")
+                .build()
+
+            var currentArr = JSONArray()
+            var sha: String? = null
+
+            client.newCall(getReq).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val respBody = JSONObject(resp.body?.string() ?: "{}")
+                    val contentB64 = respBody.getString("content").replace("\n", "")
+                    val decoded = String(Base64.decode(contentB64, Base64.DEFAULT))
+                    currentArr = try { JSONArray(decoded) } catch (e: Exception) { JSONArray() }
+                    sha = respBody.getString("sha")
+                } else {
+                    return@withContext SendResult.Error("خواندن فایل ناموفق بود (${resp.code})")
+                }
+            }
+
+            val filtered = JSONArray()
+            for (i in 0 until currentArr.length()) {
+                val o = currentArr.getJSONObject(i)
+                if (o.optString("c") != ciphertext) filtered.put(o)
+            }
+
+            val newContentB64 = Base64.encodeToString(filtered.toString(2).toByteArray(), Base64.NO_WRAP)
+            val putBodyJson = JSONObject().apply {
+                put("message", "delete chat message")
+                put("content", newContentB64)
+                put("branch", BRANCH)
+                put("sha", sha)
+            }.toString().toRequestBody("application/json".toMediaType())
+
+            val putReq = Request.Builder()
+                .url(apiUrl)
+                .addHeader("Authorization", "Bearer $token")
+                .addHeader("Accept", "application/vnd.github+json")
+                .put(putBodyJson)
+                .build()
+
+            client.newCall(putReq).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    purgeJsDelivrCache()
+                    SendResult.Success
+                } else {
+                    SendResult.Error("حذف ناموفق بود (${resp.code})")
+                }
+            }
+        } catch (e: Exception) {
+            SendResult.Error(e.message ?: "خطای ناشناخته")
+        }
+    }
+
     private fun purgeJsDelivrCache() {
         // jsDelivr caches aggressively, so without this a message you just sent can
         // stay invisible (to yourself and the other person) for a long time even

@@ -37,6 +37,8 @@ import com.autovpn.app.model.NewsMessage
 import com.autovpn.app.model.ProxyConfig
 import com.autovpn.app.news.NewsRepository
 import com.autovpn.app.subscription.ChatPasswordStore
+import com.autovpn.app.subscription.ChatSeenStore
+import com.autovpn.app.subscription.DeviceIdStore
 import com.autovpn.app.subscription.GitHubTokenStore
 import com.autovpn.app.subscription.SplitTunnelStore
 import com.autovpn.app.subscription.SubscriptionManager
@@ -54,6 +56,7 @@ import kotlinx.coroutines.withContext
 import androidx.core.content.FileProvider
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONObject
 import java.io.File
 
 enum class ConnState { DISCONNECTED, FETCHING, PINGING, CONNECTING, CONNECTED, ERROR }
@@ -73,8 +76,33 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* no-op either way - notifications just won't show if denied */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        // Background check for new chat messages every ~15 minutes (Android's
+        // minimum allowed interval for periodic work), so you get notified even
+        // when the app itself isn't open.
+        val chatCheckRequest = androidx.work.PeriodicWorkRequestBuilder<com.autovpn.app.chat.ChatCheckWorker>(
+            15, java.util.concurrent.TimeUnit.MINUTES
+        ).setConstraints(
+            androidx.work.Constraints.Builder()
+                .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                .build()
+        ).build()
+        androidx.work.WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "chat_check",
+            androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+            chatCheckRequest
+        )
+
         setContent { AppRoot() }
     }
 
@@ -253,6 +281,8 @@ class MainActivity : ComponentActivity() {
         var sending by remember { mutableStateOf(false) }
         var draft by remember { mutableStateOf("") }
         var statusMsg by remember { mutableStateOf<String?>(null) }
+        var pendingDelete by remember { mutableStateOf<ChatMessage?>(null) }
+        val myId = remember { DeviceIdStore.getOrCreate(this@MainActivity) }
         val scope = rememberCoroutineScope()
 
         fun refresh(showLoading: Boolean = true) {
@@ -265,6 +295,7 @@ class MainActivity : ComponentActivity() {
                 messages = (messages + fetched)
                     .distinctBy { it.ciphertext }
                     .sortedBy { it.timestamp }
+                ChatSeenStore.save(this@MainActivity, fetched.size)
                 if (showLoading) loading = false
             }
         }
@@ -301,11 +332,36 @@ class MainActivity : ComponentActivity() {
 
             LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 items(messages) { msg ->
-                    val plain = if (password.isNotBlank()) ChatCrypto.decrypt(msg.ciphertext, password) else null
-                    if (plain != null) {
-                        Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                            Column(modifier = Modifier.padding(10.dp)) {
-                                Text(plain)
+                    val plainPayload = if (password.isNotBlank()) ChatCrypto.decrypt(msg.ciphertext, password) else null
+                    if (plainPayload != null) {
+                        val (fromId, text) = try {
+                            val o = JSONObject(plainPayload)
+                            (o.optString("from", "") to o.optString("text", plainPayload))
+                        } catch (e: Exception) {
+                            "" to plainPayload // old-format messages sent before this update
+                        }
+                        val isMine = fromId == myId
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                            horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start
+                        ) {
+                            Card(
+                                modifier = Modifier.widthIn(max = 280.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isMine) MaterialTheme.colorScheme.primaryContainer
+                                    else MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text(text)
+                                    TextButton(
+                                        onClick = { pendingDelete = msg },
+                                        modifier = Modifier.align(Alignment.End)
+                                    ) {
+                                        Text("حذف", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
                             }
                         }
                     }
@@ -331,7 +387,11 @@ class MainActivity : ComponentActivity() {
                         scope.launch {
                             sending = true
                             statusMsg = "در حال ارسال..."
-                            val ciphertext = ChatCrypto.encrypt(text, password)
+                            val payload = JSONObject().apply {
+                                put("from", myId)
+                                put("text", text)
+                            }.toString()
+                            val ciphertext = ChatCrypto.encrypt(payload, password)
                             val sentAt = System.currentTimeMillis()
                             when (val result = ChatRepository.sendMessage(githubToken, ciphertext)) {
                                 is ChatRepository.SendResult.Success -> {
@@ -417,6 +477,33 @@ class MainActivity : ComponentActivity() {
                 },
                 dismissButton = {
                     TextButton(onClick = { showTokenDialog = false }) { Text("انصراف") }
+                }
+            )
+        }
+
+        pendingDelete?.let { toDelete ->
+            AlertDialog(
+                onDismissRequest = { pendingDelete = null },
+                title = { Text("حذفِ پیام") },
+                text = { Text("این پیام برای هر دو نفر حذف بشه؟") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val target = toDelete
+                        pendingDelete = null
+                        scope.launch {
+                            when (val result = ChatRepository.deleteMessage(githubToken, target.ciphertext)) {
+                                is ChatRepository.SendResult.Success -> {
+                                    messages = messages.filterNot { it.ciphertext == target.ciphertext }
+                                }
+                                is ChatRepository.SendResult.Error -> {
+                                    statusMsg = "حذف ناموفق: ${result.message}"
+                                }
+                            }
+                        }
+                    }) { Text("حذف") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingDelete = null }) { Text("انصراف") }
                 }
             )
         }
