@@ -14,6 +14,9 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -36,6 +39,8 @@ import com.autovpn.app.model.ChatMessage
 import com.autovpn.app.model.NewsMessage
 import com.autovpn.app.model.ProxyConfig
 import com.autovpn.app.news.NewsRepository
+import com.autovpn.app.subscription.ChatColorStore
+import com.autovpn.app.subscription.ChatNameStore
 import com.autovpn.app.subscription.ChatPasswordStore
 import com.autovpn.app.subscription.ChatSeenStore
 import com.autovpn.app.subscription.DeviceIdStore
@@ -289,6 +294,10 @@ class MainActivity : ComponentActivity() {
         var githubToken by remember { mutableStateOf(GitHubTokenStore.load(this@MainActivity)) }
         var showPasswordDialog by remember { mutableStateOf(password.isBlank()) }
         var showTokenDialog by remember { mutableStateOf(false) }
+        var showNameDialog by remember { mutableStateOf(false) }
+        var showColorDialog by remember { mutableStateOf(false) }
+        var myName by remember { mutableStateOf(ChatNameStore.load(this@MainActivity)) }
+        var myColor by remember { mutableStateOf(ChatColorStore.load(this@MainActivity)) }
         var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
         var loading by remember { mutableStateOf(false) }
         var sending by remember { mutableStateOf(false) }
@@ -297,6 +306,12 @@ class MainActivity : ComponentActivity() {
         var pendingDelete by remember { mutableStateOf<ChatMessage?>(null) }
         val myId = remember { DeviceIdStore.getOrCreate(this@MainActivity) }
         val scope = rememberCoroutineScope()
+        val timeFormat = remember { java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()) }
+
+        val colorPalette = listOf(
+            0xFF6750A4L, 0xFF2E7D32L, 0xFF1565C0L, 0xFFC62828L,
+            0xFFEF6C00L, 0xFF00838FL, 0xFF6A1B9AL, 0xFF546E7AL
+        )
 
         fun refresh(showLoading: Boolean = true) {
             scope.launch {
@@ -335,7 +350,13 @@ class MainActivity : ComponentActivity() {
             Row {
                 TextButton(onClick = { showPasswordDialog = true }) { Text("پسورد") }
                 TextButton(onClick = { showTokenDialog = true }) {
-                    Text(if (githubToken.isBlank()) "تنظیمِ توکنِ گیت‌هاب" else "توکن تنظیم شده ✓")
+                    Text(if (githubToken.isBlank()) "توکن" else "توکن ✓")
+                }
+                TextButton(onClick = { showNameDialog = true }) {
+                    Text(if (myName.isBlank()) "اسمِ من" else myName)
+                }
+                TextButton(onClick = { showColorDialog = true }) {
+                    Text("رنگِ من")
                 }
             }
             if (statusMsg != null) {
@@ -347,13 +368,21 @@ class MainActivity : ComponentActivity() {
                 items(messages) { msg ->
                     val plainPayload = if (password.isNotBlank()) ChatCrypto.decrypt(msg.ciphertext, password) else null
                     if (plainPayload != null) {
-                        val (fromId, text) = try {
+                        val (fromId, name, colorLong, text) = try {
                             val o = JSONObject(plainPayload)
-                            (o.optString("from", "") to o.optString("text", plainPayload))
+                            listOf(
+                                o.optString("from", ""),
+                                o.optString("name", ""),
+                                o.optLong("color", ChatColorStore.DEFAULT_COLOR),
+                                o.optString("text", plainPayload)
+                            )
                         } catch (e: Exception) {
-                            "" to plainPayload // old-format messages sent before this update
+                            listOf("", "", ChatColorStore.DEFAULT_COLOR, plainPayload) // old-format messages
                         }
                         val isMine = fromId == myId
+                        val senderName = (name as String).ifBlank { if (isMine) "من" else "طرفِ مقابل" }
+                        val bubbleColor = Color(colorLong as Long)
+                        val timeText = if (msg.timestamp > 0) timeFormat.format(java.util.Date(msg.timestamp)) else ""
 
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
@@ -362,17 +391,28 @@ class MainActivity : ComponentActivity() {
                             Card(
                                 modifier = Modifier.widthIn(max = 280.dp),
                                 colors = CardDefaults.cardColors(
-                                    containerColor = if (isMine) MaterialTheme.colorScheme.primaryContainer
-                                    else MaterialTheme.colorScheme.surfaceVariant
-                                )
+                                    containerColor = bubbleColor.copy(alpha = 0.18f)
+                                ),
+                                border = androidx.compose.foundation.BorderStroke(1.5.dp, bubbleColor)
                             ) {
                                 Column(modifier = Modifier.padding(10.dp)) {
-                                    Text(text)
-                                    TextButton(
-                                        onClick = { pendingDelete = msg },
-                                        modifier = Modifier.align(Alignment.End)
+                                    Text(
+                                        senderName,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = bubbleColor
+                                    )
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(text as String)
+                                    Spacer(Modifier.height(4.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text("حذف", style = MaterialTheme.typography.labelSmall)
+                                        Text(timeText, style = MaterialTheme.typography.labelSmall)
+                                        TextButton(onClick = { pendingDelete = msg }) {
+                                            Text("حذف", style = MaterialTheme.typography.labelSmall)
+                                        }
                                     }
                                 }
                             }
@@ -402,6 +442,8 @@ class MainActivity : ComponentActivity() {
                             statusMsg = "در حال ارسال..."
                             val payload = JSONObject().apply {
                                 put("from", myId)
+                                put("name", myName)
+                                put("color", myColor)
                                 put("text", text)
                             }.toString()
                             val ciphertext = ChatCrypto.encrypt(payload, password)
@@ -456,6 +498,66 @@ class MainActivity : ComponentActivity() {
                 },
                 dismissButton = {
                     TextButton(onClick = { showPasswordDialog = false }) { Text("انصراف") }
+                }
+            )
+        }
+
+        if (showNameDialog) {
+            var input by remember { mutableStateOf(myName) }
+            AlertDialog(
+                onDismissRequest = { showNameDialog = false },
+                title = { Text("اسمِ نمایشیِ تو توی چت") },
+                text = {
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        placeholder = { Text("مثلاً: علی") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        myName = input.trim()
+                        ChatNameStore.save(this@MainActivity, myName)
+                        showNameDialog = false
+                    }) { Text("ذخیره") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showNameDialog = false }) { Text("انصراف") }
+                }
+            )
+        }
+
+        if (showColorDialog) {
+            AlertDialog(
+                onDismissRequest = { showColorDialog = false },
+                title = { Text("رنگِ کادرِ پیام‌هایِ تو") },
+                text = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        colorPalette.forEach { c ->
+                            val color = Color(c)
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(color, shape = androidx.compose.foundation.shape.CircleShape)
+                                    .then(
+                                        if (c == myColor) Modifier.border(
+                                            2.dp, MaterialTheme.colorScheme.onSurface,
+                                            androidx.compose.foundation.shape.CircleShape
+                                        ) else Modifier
+                                    )
+                                    .clickable {
+                                        myColor = c
+                                        ChatColorStore.save(this@MainActivity, c)
+                                        showColorDialog = false
+                                    }
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showColorDialog = false }) { Text("بستن") }
                 }
             )
         }
