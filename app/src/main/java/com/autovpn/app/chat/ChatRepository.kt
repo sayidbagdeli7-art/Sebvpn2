@@ -222,4 +222,33 @@ object ChatRepository {
             // best-effort only
         }
     }
+
+    /** Same as sendMessage, but goes through a Cloudflare Worker relay instead of
+     *  using a personal GitHub token directly - the Worker holds the real token as
+     *  a secret, so nobody using this needs (or ever sees) it. */
+    suspend fun sendMessageViaRelay(workerUrl: String, accessKey: String, ciphertext: String): SendResult =
+        callRelay(workerUrl.trimEnd('/') + "/send", accessKey, ciphertext)
+
+    suspend fun deleteMessageViaRelay(workerUrl: String, accessKey: String, ciphertext: String): SendResult =
+        callRelay(workerUrl.trimEnd('/') + "/delete", accessKey, ciphertext)
+
+    private suspend fun callRelay(url: String, accessKey: String, ciphertext: String): SendResult =
+        withContext(Dispatchers.IO) {
+            if (url.isBlank()) return@withContext SendResult.Error("آدرسِ Worker وارد نشده")
+            if (accessKey.isBlank()) return@withContext SendResult.Error("کلیدِ دسترسی وارد نشده")
+            try {
+                val bodyJson = JSONObject().apply {
+                    put("key", accessKey)
+                    put("ciphertext", ciphertext)
+                }.toString().toRequestBody("application/json".toMediaType())
+
+                val req = Request.Builder().url(url).post(bodyJson).build()
+                client.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) SendResult.Success
+                    else SendResult.Error("Worker خطا داد (${resp.code})")
+                }
+            } catch (e: Exception) {
+                SendResult.Error(e.message ?: "خطای ناشناخته")
+            }
+        }
 }

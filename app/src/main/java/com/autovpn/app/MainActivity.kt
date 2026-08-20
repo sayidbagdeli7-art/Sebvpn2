@@ -42,6 +42,7 @@ import com.autovpn.app.news.NewsRepository
 import com.autovpn.app.subscription.ChatColorStore
 import com.autovpn.app.subscription.ChatNameStore
 import com.autovpn.app.subscription.ChatPasswordStore
+import com.autovpn.app.subscription.ChatRelayStore
 import com.autovpn.app.subscription.ChatSeenStore
 import com.autovpn.app.subscription.DeviceIdStore
 import com.autovpn.app.subscription.GitHubTokenStore
@@ -296,6 +297,10 @@ class MainActivity : ComponentActivity() {
         var showTokenDialog by remember { mutableStateOf(false) }
         var showNameDialog by remember { mutableStateOf(false) }
         var showColorDialog by remember { mutableStateOf(false) }
+        var showRelayDialog by remember { mutableStateOf(false) }
+        var relayEnabled by remember { mutableStateOf(ChatRelayStore.isEnabled(this@MainActivity)) }
+        var relayUrl by remember { mutableStateOf(ChatRelayStore.loadWorkerUrl(this@MainActivity)) }
+        var relayKey by remember { mutableStateOf(ChatRelayStore.loadAccessKey(this@MainActivity)) }
         var myName by remember { mutableStateOf(ChatNameStore.load(this@MainActivity)) }
         var myColor by remember { mutableStateOf(ChatColorStore.load(this@MainActivity)) }
         var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
@@ -358,6 +363,19 @@ class MainActivity : ComponentActivity() {
                 TextButton(onClick = { showColorDialog = true }) {
                     Text("رنگِ من")
                 }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = relayEnabled,
+                    onCheckedChange = { checked ->
+                        relayEnabled = checked
+                        ChatRelayStore.setEnabled(this@MainActivity, checked)
+                        if (checked) showRelayDialog = true
+                    }
+                )
+                Spacer(Modifier.width(4.dp))
+                Text("ارسال از طریق Cloudflare (بدونِ توکنِ گیت‌هاب)", style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f))
+                TextButton(onClick = { showRelayDialog = true }) { Text("تنظیمات") }
             }
             if (statusMsg != null) {
                 Text(statusMsg!!, style = MaterialTheme.typography.labelSmall)
@@ -448,7 +466,12 @@ class MainActivity : ComponentActivity() {
                             }.toString()
                             val ciphertext = ChatCrypto.encrypt(payload, password)
                             val sentAt = System.currentTimeMillis()
-                            when (val result = ChatRepository.sendMessage(githubToken, ciphertext)) {
+                            val result = if (relayEnabled) {
+                                ChatRepository.sendMessageViaRelay(relayUrl, relayKey, ciphertext)
+                            } else {
+                                ChatRepository.sendMessage(githubToken, ciphertext)
+                            }
+                            when (result) {
                                 is ChatRepository.SendResult.Success -> {
                                     // Add it straight to the visible list instead of only
                                     // relying on a re-fetch - jsDelivr's cache can take a
@@ -596,6 +619,51 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        if (showRelayDialog) {
+            var urlInput by remember { mutableStateOf(relayUrl) }
+            var keyInput by remember { mutableStateOf(relayKey) }
+            AlertDialog(
+                onDismissRequest = { showRelayDialog = false },
+                title = { Text("تنظیماتِ Cloudflare") },
+                text = {
+                    Column {
+                        Text(
+                            "به‌جایِ توکنِ گیت‌هاب، آدرسِ Workerِ کلودفلر و کلیدِ دسترسی رو وارد کن. این کلید فقط برایِ فرستادن/حذفِ پیام از طریقِ Worker کاربرد داره، هیچ دسترسیِ دیگه‌ای به ریپو نمی‌ده.",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = urlInput,
+                            onValueChange = { urlInput = it },
+                            placeholder = { Text("https://chat-relay.یوزرنیمت.workers.dev") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = keyInput,
+                            onValueChange = { keyInput = it },
+                            placeholder = { Text("کلیدِ دسترسی") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        relayUrl = urlInput.trim()
+                        relayKey = keyInput.trim()
+                        ChatRelayStore.saveWorkerUrl(this@MainActivity, relayUrl)
+                        ChatRelayStore.saveAccessKey(this@MainActivity, relayKey)
+                        showRelayDialog = false
+                    }) { Text("ذخیره") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showRelayDialog = false }) { Text("انصراف") }
+                }
+            )
+        }
+
         pendingDelete?.let { toDelete ->
             AlertDialog(
                 onDismissRequest = { pendingDelete = null },
@@ -606,7 +674,12 @@ class MainActivity : ComponentActivity() {
                         val target = toDelete
                         pendingDelete = null
                         scope.launch {
-                            when (val result = ChatRepository.deleteMessage(githubToken, target.ciphertext)) {
+                            val result = if (relayEnabled) {
+                                ChatRepository.deleteMessageViaRelay(relayUrl, relayKey, target.ciphertext)
+                            } else {
+                                ChatRepository.deleteMessage(githubToken, target.ciphertext)
+                            }
+                            when (result) {
                                 is ChatRepository.SendResult.Success -> {
                                     messages = messages.filterNot { it.ciphertext == target.ciphertext }
                                 }
