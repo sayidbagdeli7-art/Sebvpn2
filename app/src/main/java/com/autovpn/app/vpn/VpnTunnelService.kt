@@ -40,12 +40,33 @@ class VpnTunnelService : VpnService() {
 
         /** Bytes moved through the "proxy" outbound since the last call (QueryStats
          *  resets its counter on every read), as (uplinkBytes, downlinkBytes). Returns
-         *  (0,0) if nothing is running or stats aren't available. */
+         *  (0,0) if nothing is running or stats aren't available.
+         *
+         *  Uses reflection instead of calling the method directly: this library is
+         *  fetched as "latest" on every build, and its exact method name/casing has
+         *  changed before (queryStats vs QueryStats) and broken the build. Looking it
+         *  up by name at runtime means a future rename just silently disables this
+         *  one feature instead of failing the whole compile. */
         fun queryTraffic(): Pair<Long, Long> {
             val controller = runningInstance?.coreController ?: return 0L to 0L
-            val up = try { controller.QueryStats(OUTBOUND_TAG, "uplink") } catch (e: Exception) { 0L }
-            val down = try { controller.QueryStats(OUTBOUND_TAG, "downlink") } catch (e: Exception) { 0L }
+            val up = tryQueryStats(controller, OUTBOUND_TAG, "uplink")
+            val down = tryQueryStats(controller, OUTBOUND_TAG, "downlink")
             return up to down
+        }
+
+        private fun tryQueryStats(controller: Any, tag: String, direction: String): Long {
+            val candidateNames = listOf("QueryStats", "queryStats", "GetStats", "getStats")
+            for (name in candidateNames) {
+                try {
+                    val method = controller.javaClass.getMethod(name, String::class.java, String::class.java)
+                    return (method.invoke(controller, tag, direction) as? Long) ?: 0L
+                } catch (e: NoSuchMethodException) {
+                    continue
+                } catch (e: Exception) {
+                    return 0L
+                }
+            }
+            return 0L
         }
     }
 
