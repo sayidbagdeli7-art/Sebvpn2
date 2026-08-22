@@ -43,8 +43,8 @@ class VpnTunnelService : VpnService() {
          *  (0,0) if nothing is running or stats aren't available. */
         fun queryTraffic(): Pair<Long, Long> {
             val controller = runningInstance?.coreController ?: return 0L to 0L
-            val up = try { controller.queryStats(OUTBOUND_TAG, "uplink") } catch (e: Exception) { 0L }
-            val down = try { controller.queryStats(OUTBOUND_TAG, "downlink") } catch (e: Exception) { 0L }
+            val up = try { controller.QueryStats(OUTBOUND_TAG, "uplink") } catch (e: Exception) { 0L }
+            val down = try { controller.QueryStats(OUTBOUND_TAG, "downlink") } catch (e: Exception) { 0L }
             return up to down
         }
     }
