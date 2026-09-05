@@ -1,0 +1,57 @@
+name: Chat Cleanup
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # every hour
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chat-data
+          fetch-depth: 1
+
+      - name: Drop messages older than 24h and rewrite history
+        run: |
+          python3 - << 'PYEOF'
+          import json, time, os
+
+          path = "chat/messages.json"
+          cutoff_ms = int(time.time() * 1000) - 24 * 60 * 60 * 1000
+
+          try:
+              with open(path, "r", encoding="utf-8") as f:
+                  messages = json.load(f)
+          except Exception:
+              messages = []
+
+          kept = [m for m in messages if m.get("t", 0) >= cutoff_ms]
+
+          os.makedirs("chat", exist_ok=True)
+          with open(path, "w", encoding="utf-8") as f:
+              json.dump(kept, f, ensure_ascii=False, indent=2)
+
+          print(f"kept {len(kept)} of {len(messages)} messages")
+          PYEOF
+
+      - name: Create a fresh orphan commit (erases old history) and force-push
+        run: |
+          git config user.name "chat-cleanup-bot"
+          git config user.email "chat-cleanup-bot@users.noreply.github.com"
+
+          git checkout --orphan chat-data-new
+          git add chat/messages.json
+          git commit -m "chat state (older messages purged)"
+          git branch -D chat-data
+          git branch -m chat-data
+          git push origin chat-data --force
+
+      - name: Purge jsDelivr cache for the chat file
+        run: |
+          curl -s "https://purge.jsdelivr.net/gh/${GITHUB_REPOSITORY}@chat-data/chat/messages.json" || true
