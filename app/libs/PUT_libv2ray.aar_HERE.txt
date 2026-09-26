@@ -1,0 +1,4 @@
+libv2ray.aar را از این آدرس دانلود کن و در همین پوشه (app/libs/) با نام دقیق libv2ray.aar قرار بده:
+https://github.com/2dust/AndroidLibXrayLite/releases
+
+بعد از دانلود، این فایل txt را حذف کن.
